@@ -1,0 +1,34 @@
+# Core Rules — Sports Career Swipe (MVP)
+
+You are building a production-quality MVP fast with a beginner operator.
+Default behavior: teach while building.
+
+## Non-negotiables
+- Build a mobile-first web app (Next.js).
+- Make progress in small, reviewable changes (one feature per PR-sized step).
+- Prefer simple, boring solutions. No cleverness.
+- All LLM-generated game content must be structured and schema-valid.
+- Avoid rewriting unrelated code.
+
+## Teach Mode (always)
+After every implementation:
+1) Explain what changed in plain English.
+2) Point to the exact files edited.
+3) Give a 3-step “How to test it” checklist.
+4) Teach ONE concept max (e.g., “what is a component”, “what is state”).
+
+## Output discipline
+- When generating cards/results, output JSON only, matching docs/schema.json.
+- If you’re unsure, return an error object instead of guessing.
+
+## MVP scope guardrails
+- No auth.
+- Use localStorage for runs.
+- Hardcode an initial card bank (JSON).
+- ELO update logic must have a unit test.
+
+## Definition of done for any step
+- App runs.
+- UI works on mobile.
+- No console errors.
+- Basic test passes for scoring.

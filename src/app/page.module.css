@@ -1,0 +1,80 @@
+.page {
+  display: flex;
+  min-height: 100vh;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-geist-sans);
+  padding: 24px;
+}
+
+.main {
+  display: flex;
+  width: 100%;
+  max-width: 520px;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 24px;
+}
+
+.intro {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.intro h1 {
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 40px;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.intro p {
+  font-size: 16px;
+  line-height: 24px;
+  text-wrap: balance;
+  opacity: 0.8;
+}
+
+.ctas {
+  display: flex;
+  width: 100%;
+  gap: 12px;
+}
+
+.ctas a {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 48px;
+  padding: 0 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(127, 127, 127, 0.25);
+  transition: 0.2s;
+  cursor: pointer;
+  width: 100%;
+  font-weight: 600;
+}
+
+a.primary {
+  background: var(--foreground);
+  color: var(--background);
+  border-color: transparent;
+}
+
+/* Enable hover only on non-touch devices */
+@media (hover: hover) and (pointer: fine) {
+  a.primary:hover {
+    opacity: 0.9;
+  }
+}
+
+@media (max-width: 600px) {
+  .intro h1 {
+    font-size: 32px;
+    line-height: 40px;
+    letter-spacing: -0.02em;
+  }
+}
