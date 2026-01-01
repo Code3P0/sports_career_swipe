@@ -1,0 +1,72 @@
+{
+  "Lane": {
+    "id": "string",
+    "name": "string",
+    "description": "string",
+    "tags": ["string"]
+  },
+  "Figure": {
+    "id": "string",
+    "name": "string",
+    "primary_lane_id": "string",
+    "secondary_lane_id": "string",
+    "tags": ["string"],
+    "vignette": "string",
+    "tradeoff": "string",
+    "why_it_matches_template": "string"
+  },
+  "Card": {
+    "id": "string",
+    "type": "lane_scenario | figure_shadow",
+    "left": {
+      "title": "string",
+      "body": "string",
+      "lane_ids": ["string"],
+      "tags": ["string"]
+    },
+    "right": {
+      "title": "string",
+      "body": "string",
+      "lane_ids": ["string"],
+      "tags": ["string"]
+    }
+  },
+  "RunState": {
+    "round": "number",
+    "max_rounds": "number",
+    "lane_ratings": {
+      "lane_id": "number"
+    },
+    "history": [
+      {
+        "card_id": "string",
+        "picked": "left | right",
+        "timestamp_iso": "string"
+      }
+    ],
+    "convergence": {
+      "top_lane_id": "string",
+      "runner_up_lane_id": "string",
+      "rating_gap": "number",
+      "confidence_pct": "number"
+    }
+  },
+  "Result": {
+    "primary_lane_id": "string",
+    "primary_confidence_pct": "number",
+    "runner_up_lane_id": "string",
+    "runner_up_confidence_pct": "number",
+    "why_you_matched": ["string"],
+    "north_star_figures": [
+      {
+        "figure_id": "string",
+        "why": "string"
+      }
+    ],
+    "quest_7_day": {
+      "artifacts": ["string"],
+      "outreach_actions": ["string"],
+      "reflection_prompt": "string"
+    }
+  }
+}
