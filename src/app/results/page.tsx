@@ -6,6 +6,8 @@ import type { RunState } from '@/types/schema'
 import { getLaneById } from '@/data/lanes'
 import { getFiguresByLaneId } from '@/data/figures'
 import { getStatementById } from '@/data/statements'
+import { getActionsByLaneId } from '@/data/actions'
+import { loadSavedActionIds, toggleSavedAction, isSaved } from '@/lib/savedActions'
 
 /**
  * Confidence thresholds incorporating rating gap and signal quality:
@@ -37,6 +39,7 @@ export default function ResultsPage() {
   const router = useRouter()
   const [runState, setRunState] = useState<RunState | null>(null)
   const [showAllFigures, setShowAllFigures] = useState(false)
+  const [savedActionIds, setSavedActionIds] = useState<string[]>([])
 
   useEffect(() => {
     const stored = localStorage.getItem('runState')
@@ -52,11 +55,54 @@ export default function ResultsPage() {
       // No state found, redirect to play
       router.push('/play')
     }
+    
+    // Load saved actions
+    setSavedActionIds(loadSavedActionIds())
   }, [router])
 
   const handleReset = () => {
     localStorage.removeItem('runState')
     router.push('/play')
+  }
+
+  const handleToggleSave = (actionId: string) => {
+    const updated = toggleSavedAction(actionId)
+    setSavedActionIds(updated)
+  }
+
+  const handleCopyPlan = async () => {
+    if (!topLane || !runState) return
+    
+    const actions = topLaneId ? getActionsByLaneId(topLaneId) : []
+    const runnerUpName = runnerUpLane ? runnerUpLane.name : 'N/A'
+    
+    let text = `Career Swipe Results\n\n`
+    text += `Top Lane: ${topLane.name}\n`
+    text += `Runner-up: ${runnerUpName}\n`
+    text += `Confidence: ${confidenceLabel}\n`
+    text += `Signal Quality: ${signalQuality}\n\n`
+    text += `Next Actions (15-60 min):\n\n`
+    
+    actions.forEach((action, idx) => {
+      const saved = isSaved(action.id, savedActionIds)
+      text += `${idx + 1}. ${action.title} (${action.minutes} min)${saved ? ' [Saved]' : ''}\n`
+      text += `   ${action.description}\n`
+      text += `   Deliverable: ${action.deliverable}\n\n`
+    })
+    
+    if (runnerUpLane) {
+      text += `If you're between lanes:\n`
+      text += `Consider a hybrid mini-project combining ${topLane.name} and ${runnerUpLane.name}—for example, creating a content series that drives community engagement while measuring growth metrics.\n`
+    }
+    
+    try {
+      await navigator.clipboard.writeText(text)
+      // Optional: show a brief success message
+      alert('Plan copied to clipboard!')
+    } catch (e) {
+      console.error('Failed to copy:', e)
+      alert('Failed to copy. Please try again.')
+    }
   }
 
   if (!runState) {
@@ -185,6 +231,149 @@ export default function ResultsPage() {
           }}>
             {runnerUpLane.name}
           </h3>
+        </div>
+      )}
+
+      {/* Next Actions section */}
+      {topLaneId && (
+        <div style={{
+          padding: '24px',
+          backgroundColor: 'white',
+          borderRadius: '12px',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+          marginBottom: '1.5rem'
+        }}>
+          <h3 style={{
+            fontSize: '1.2rem',
+            fontWeight: '600',
+            marginBottom: '16px'
+          }}>
+            Next Actions (15–60 min)
+          </h3>
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '16px'
+          }}>
+            {getActionsByLaneId(topLaneId).map((action) => {
+              const saved = isSaved(action.id, savedActionIds)
+              return (
+                <div
+                  key={action.id}
+                  style={{
+                    padding: '16px',
+                    backgroundColor: '#f9f9f9',
+                    borderRadius: '8px',
+                    border: saved ? '2px solid #4CAF50' : '1px solid #e0e0e0',
+                    position: 'relative'
+                  }}
+                >
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-start',
+                    marginBottom: '8px'
+                  }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        marginBottom: '6px'
+                      }}>
+                        <h4 style={{
+                          fontSize: '1rem',
+                          fontWeight: '600',
+                          margin: 0
+                        }}>
+                          {action.title}
+                        </h4>
+                        <span style={{
+                          fontSize: '0.85rem',
+                          color: '#666',
+                          backgroundColor: '#e0e0e0',
+                          padding: '2px 8px',
+                          borderRadius: '4px'
+                        }}>
+                          {action.minutes} min
+                        </span>
+                      </div>
+                      <p style={{
+                        fontSize: '0.9rem',
+                        color: '#666',
+                        lineHeight: '1.5',
+                        marginBottom: '8px'
+                      }}>
+                        {action.description}
+                      </p>
+                      <div style={{
+                        fontSize: '0.85rem',
+                        color: '#666'
+                      }}>
+                        <strong>Deliverable:</strong> {action.deliverable}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleToggleSave(action.id)}
+                      style={{
+                        marginLeft: '12px',
+                        padding: '6px 12px',
+                        fontSize: '0.85rem',
+                        fontWeight: '500',
+                        backgroundColor: saved ? '#4CAF50' : '#e0e0e0',
+                        color: saved ? 'white' : '#666',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s',
+                        whiteSpace: 'nowrap'
+                      }}
+                      onMouseOver={(e) => {
+                        if (!saved) {
+                          e.currentTarget.style.backgroundColor = '#d0d0d0'
+                        }
+                      }}
+                      onMouseOut={(e) => {
+                        if (!saved) {
+                          e.currentTarget.style.backgroundColor = '#e0e0e0'
+                        }
+                      }}
+                    >
+                      {saved ? '✓ Saved' : 'Save'}
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Hybrid mini-project suggestion */}
+      {topLane && runnerUpLane && (
+        <div style={{
+          padding: '20px',
+          backgroundColor: '#f0f7ff',
+          borderRadius: '12px',
+          marginBottom: '1.5rem',
+          border: '1px solid #b3d9ff'
+        }}>
+          <h3 style={{
+            fontSize: '1rem',
+            fontWeight: '600',
+            marginBottom: '8px',
+            color: '#0051cc'
+          }}>
+            If you're between lanes…
+          </h3>
+          <p style={{
+            fontSize: '0.95rem',
+            color: '#333',
+            lineHeight: '1.5',
+            margin: 0
+          }}>
+            Consider a hybrid mini-project combining <strong>{topLane.name}</strong> and <strong>{runnerUpLane.name}</strong>—for example, creating a content series that drives community engagement while measuring growth metrics.
+          </p>
         </div>
       )}
 
@@ -318,6 +507,58 @@ export default function ResultsPage() {
           </ul>
         </div>
       )}
+
+      {/* Copy Plan button */}
+      <button
+        onClick={handleCopyPlan}
+        style={{
+          padding: '16px 32px',
+          fontSize: '1.1rem',
+          fontWeight: '600',
+          backgroundColor: '#9e9e9e',
+          color: 'white',
+          border: 'none',
+          borderRadius: '8px',
+          cursor: 'pointer',
+          transition: 'background-color 0.2s',
+          marginBottom: '1rem',
+          width: '100%'
+        }}
+        onMouseOver={(e) => {
+          e.currentTarget.style.backgroundColor = '#757575'
+        }}
+        onMouseOut={(e) => {
+          e.currentTarget.style.backgroundColor = '#9e9e9e'
+        }}
+      >
+        Copy my plan
+      </button>
+
+      {/* Explore Career Map button */}
+      <button
+        onClick={() => router.push('/map')}
+        style={{
+          padding: '16px 32px',
+          fontSize: '1.1rem',
+          fontWeight: '600',
+          backgroundColor: '#4CAF50',
+          color: 'white',
+          border: 'none',
+          borderRadius: '8px',
+          cursor: 'pointer',
+          transition: 'background-color 0.2s',
+          marginBottom: '1rem',
+          width: '100%'
+        }}
+        onMouseOver={(e) => {
+          e.currentTarget.style.backgroundColor = '#45a049'
+        }}
+        onMouseOut={(e) => {
+          e.currentTarget.style.backgroundColor = '#4CAF50'
+        }}
+      >
+        Explore the Career Map
+      </button>
 
       {/* Reset button */}
       <button

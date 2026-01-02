@@ -100,6 +100,7 @@ export default function PlayPage() {
   const [exitMode, setExitMode] = useState<'yes' | 'no' | 'skip' | null>(null)
   const cardRef = useRef<HTMLDivElement>(null)
   const undoSnapshotRef = useRef<{ runState: RunState; statementIndex: number } | null>(null)
+  const isAdvancingRef = useRef(false) // Guard against double-commit
 
   // Get valid statement IDs for migration
   const validStatementIds = getValidStatementIds()
@@ -248,7 +249,16 @@ export default function PlayPage() {
   }
 
   const commitChoice = (answer: 'yes' | 'no') => {
-    if (!runState || isAnimating || !currentStatement) return
+    if (!runState || isAnimating || !currentStatement || isAdvancingRef.current) return
+
+    // Check if we've reached max rounds BEFORE updating state
+    if (runState.round >= MAX_ROUNDS) {
+      router.push('/results')
+      return
+    }
+
+    // Set guard to prevent double-commit
+    isAdvancingRef.current = true
 
     // Store snapshot for undo before making changes
     undoSnapshotRef.current = {
@@ -299,6 +309,26 @@ export default function PlayPage() {
 
     const newRound = runState.round + 1
     
+    // Check if this will exceed max rounds BEFORE updating state
+    if (newRound > MAX_ROUNDS) {
+      // Final answer - commit to history but route immediately
+      const finalState: RunState = {
+        ...runState,
+        round: newRound,
+        lane_ratings: updatedRatings,
+        history: [...runState.history, historyEntry],
+        seen_statement_ids: seenIds,
+        lane_counts_shown: laneCounts,
+        answer_counts: answerCounts,
+        current_statement_id: null
+      }
+      setRunState(finalState)
+      localStorage.setItem('runState', JSON.stringify(finalState))
+      router.push('/results')
+      isAdvancingRef.current = false
+      return
+    }
+    
     // Select next statement BEFORE updating state
     const tempState: RunState = {
       ...runState,
@@ -322,6 +352,7 @@ export default function PlayPage() {
       setRunState(finalState)
       localStorage.setItem('runState', JSON.stringify(finalState))
       router.push('/results')
+      isAdvancingRef.current = false
       return
     }
     
@@ -342,9 +373,10 @@ export default function PlayPage() {
         startX: 0,
         currentX: 0
       })
+      isAdvancingRef.current = false // Clear guard after animation
       
-      // Check for early finish or max rounds
-      if (canFinishEarly(updatedState) || newRound > MAX_ROUNDS) {
+      // Check for early finish (max rounds already checked above)
+      if (canFinishEarly(updatedState)) {
         router.push('/results')
       }
       // else: current_statement_id already set, card will render
@@ -353,7 +385,16 @@ export default function PlayPage() {
 
   // Meh logic: advances game without changing lane_ratings
   const commitMeh = () => {
-    if (!runState || isAnimating || !currentStatement) return
+    if (!runState || isAnimating || !currentStatement || isAdvancingRef.current) return
+
+    // Check if we've reached max rounds BEFORE updating state
+    if (runState.round >= MAX_ROUNDS) {
+      router.push('/results')
+      return
+    }
+
+    // Set guard to prevent double-commit
+    isAdvancingRef.current = true
 
     // Store snapshot for undo before making changes
     undoSnapshotRef.current = {
@@ -388,6 +429,26 @@ export default function PlayPage() {
 
     const newRound = runState.round + 1
     
+    // Check if this will exceed max rounds BEFORE updating state
+    if (newRound > MAX_ROUNDS) {
+      // Final answer - commit to history but route immediately
+      const finalState: RunState = {
+        ...runState,
+        round: newRound,
+        // lane_ratings unchanged
+        history: [...runState.history, historyEntry],
+        seen_statement_ids: seenIds,
+        lane_counts_shown: laneCounts,
+        answer_counts: answerCounts,
+        current_statement_id: null
+      }
+      setRunState(finalState)
+      localStorage.setItem('runState', JSON.stringify(finalState))
+      router.push('/results')
+      isAdvancingRef.current = false
+      return
+    }
+    
     // Select next statement BEFORE updating state
     const tempState: RunState = {
       ...runState,
@@ -411,6 +472,7 @@ export default function PlayPage() {
       setRunState(finalState)
       localStorage.setItem('runState', JSON.stringify(finalState))
       router.push('/results')
+      isAdvancingRef.current = false
       return
     }
     
@@ -431,9 +493,10 @@ export default function PlayPage() {
         startX: 0,
         currentX: 0
       })
+      isAdvancingRef.current = false // Clear guard after animation
       
-      // Check for early finish or max rounds
-      if (canFinishEarly(updatedState) || newRound > MAX_ROUNDS) {
+      // Check for early finish (max rounds already checked above)
+      if (canFinishEarly(updatedState)) {
         router.push('/results')
       }
       // else: current_statement_id already set, card will render
@@ -442,7 +505,16 @@ export default function PlayPage() {
 
   // Skip logic: advances game without changing lane_ratings
   const commitSkip = () => {
-    if (!runState || isAnimating || !currentStatement) return
+    if (!runState || isAnimating || !currentStatement || isAdvancingRef.current) return
+
+    // Check if we've reached max rounds BEFORE updating state
+    if (runState.round >= MAX_ROUNDS) {
+      router.push('/results')
+      return
+    }
+
+    // Set guard to prevent double-commit
+    isAdvancingRef.current = true
 
     // Store snapshot for undo before making changes
     undoSnapshotRef.current = {
@@ -477,6 +549,26 @@ export default function PlayPage() {
 
     const newRound = runState.round + 1
     
+    // Check if this will exceed max rounds BEFORE updating state
+    if (newRound > MAX_ROUNDS) {
+      // Final answer - commit to history but route immediately
+      const finalState: RunState = {
+        ...runState,
+        round: newRound,
+        // lane_ratings unchanged
+        history: [...runState.history, historyEntry],
+        seen_statement_ids: seenIds,
+        lane_counts_shown: laneCounts,
+        answer_counts: answerCounts,
+        current_statement_id: null
+      }
+      setRunState(finalState)
+      localStorage.setItem('runState', JSON.stringify(finalState))
+      router.push('/results')
+      isAdvancingRef.current = false
+      return
+    }
+    
     // Select next statement BEFORE updating state
     const tempState: RunState = {
       ...runState,
@@ -500,6 +592,7 @@ export default function PlayPage() {
       setRunState(finalState)
       localStorage.setItem('runState', JSON.stringify(finalState))
       router.push('/results')
+      isAdvancingRef.current = false
       return
     }
     
@@ -520,9 +613,10 @@ export default function PlayPage() {
         startX: 0,
         currentX: 0
       })
+      isAdvancingRef.current = false // Clear guard after animation
       
-      // Check for early finish or max rounds
-      if (canFinishEarly(updatedState) || newRound > MAX_ROUNDS) {
+      // Check for early finish (max rounds already checked above)
+      if (canFinishEarly(updatedState)) {
         router.push('/results')
       }
       // else: current_statement_id already set, card will render
