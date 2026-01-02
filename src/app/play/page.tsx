@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import type { Card, RunState, HistoryEntry } from '@/types/schema'
 import { updateElo } from '@/lib/elo'
 import { cards, getPrimaryLaneId } from '@/data/cards'
@@ -23,6 +24,7 @@ const INITIAL_LANE_RATINGS: Record<string, number> = Object.fromEntries(
 )
 
 export default function PlayPage() {
+  const router = useRouter()
   const [runState, setRunState] = useState<RunState | null>(null)
   const [currentCard] = useState<Card>(cards[0])
 
@@ -94,24 +96,21 @@ export default function PlayPage() {
       timestamp_iso: new Date().toISOString()
     }
 
+    const newRound = runState.round + 1
     const updatedState: RunState = {
       ...runState,
-      round: runState.round + 1,
+      round: newRound,
       lane_ratings: updatedRatings,
       history: [...runState.history, historyEntry]
     }
 
     setRunState(updatedState)
     localStorage.setItem('runState', JSON.stringify(updatedState))
-  }
 
-  // Get top 2 lanes for debug readout
-  const getTopLanes = () => {
-    if (!runState) return []
-    const entries = Object.entries(runState.lane_ratings)
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 2)
-    return entries.map(([laneId, rating]) => ({ laneId, rating }))
+    // Navigate to results after 16 taps
+    if (newRound > runState.max_rounds) {
+      router.push('/results')
+    }
   }
 
   if (!runState) {
@@ -239,23 +238,6 @@ export default function PlayPage() {
         paddingTop: '2rem'
       }}>
         Tap a card to make your choice
-      </div>
-
-      {/* Debug readout: top 2 lanes */}
-      <div style={{
-        marginTop: '2rem',
-        padding: '12px',
-        backgroundColor: '#f0f0f0',
-        borderRadius: '8px',
-        fontSize: '0.85rem',
-        color: '#666'
-      }}>
-        <div style={{ fontWeight: '600', marginBottom: '8px' }}>Top Lanes (debug):</div>
-        {getTopLanes().map(({ laneId, rating }, idx) => (
-          <div key={laneId} style={{ marginBottom: '4px' }}>
-            {idx + 1}. {laneId}: {rating}
-          </div>
-        ))}
       </div>
     </main>
   )
