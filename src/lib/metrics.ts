@@ -3,6 +3,8 @@
  * Logs events as JSON lines with timestamps
  */
 
+import { MetricsBufferSchema, safeJsonParse } from './schemas'
+
 const STORAGE_KEY = 'sports-career-swipe:metrics:v1'
 const MAX_EVENTS = 200
 
@@ -29,7 +31,20 @@ export function track(eventName: string, props?: Record<string, any>): void {
   if (typeof window !== 'undefined') {
     try {
       const stored = localStorage.getItem(STORAGE_KEY)
-      const events: MetricEvent[] = stored ? JSON.parse(stored) : []
+      let events: MetricEvent[] = []
+
+      if (stored) {
+        const parsed = safeJsonParse<unknown>(stored)
+        if (parsed) {
+          const validation = MetricsBufferSchema.safeParse(parsed)
+          if (validation.success) {
+            events = validation.data
+          } else {
+            // Invalid buffer, treat as empty
+            console.warn('Invalid metrics buffer, resetting:', validation.error.issues)
+          }
+        }
+      }
 
       events.push(event)
 

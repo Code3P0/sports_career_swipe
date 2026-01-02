@@ -6,6 +6,8 @@
 import type { RunState, HistoryEntry } from '@/types/schema'
 import { updateElo } from './elo'
 import { getValidStatementIds } from '@/data/statements'
+import { RunStateSchema, safeJsonParse } from './schemas'
+import { healRunState } from './heal'
 
 // All 8 MVP lanes (shared constant)
 const ALL_LANES = [
@@ -19,7 +21,8 @@ const ALL_LANES = [
   'product',
 ]
 
-const STORAGE_KEY = 'runState'
+const OLD_STORAGE_KEY = 'runState'
+const NEW_STORAGE_KEY = 'sports-career-swipe:run-state:v1'
 const CURRENT_SCHEMA_VERSION = 2
 const BASELINE_RATING = 1000
 const MAX_ROUNDS = 32
@@ -31,21 +34,80 @@ export const INITIAL_LANE_RATINGS: Record<string, number> = Object.fromEntries(
 
 /**
  * Load RunState from localStorage
- * Returns null if not found or invalid
+ * Returns null if not found, or fresh RunState if corrupted
+ * Recovery chain: validate -> migrate -> validate -> heal -> validate -> reset
+ * Tries NEW_KEY first, falls back to OLD_KEY for backward compatibility
  */
 export function loadRunState(): RunState | null {
   if (typeof window === 'undefined') return null
 
   try {
-    const stored = localStorage.getItem(STORAGE_KEY)
+    // Try new key first
+    let stored = localStorage.getItem(NEW_STORAGE_KEY)
+    let usedOldKey = false
+
+    // Fallback to old key for backward compatibility
+    if (!stored) {
+      stored = localStorage.getItem(OLD_STORAGE_KEY)
+      usedOldKey = true
+    }
+
     if (!stored) return null
 
-    const parsed = JSON.parse(stored)
+    // Step 1: Safe JSON parse
+    const parsed = safeJsonParse<any>(stored)
+    if (!parsed) {
+      console.warn('Failed to parse runState JSON, resetting')
+      const fresh = resetRunState()
+      saveRunState(fresh)
+      return fresh
+    }
+
+    // Step 2: Validate
+    let validation = RunStateSchema.safeParse(parsed)
+    if (validation.success) {
+      const validState = validation.data as RunState
+      // Write-through migration: if we used old key, write to new key
+      if (usedOldKey) {
+        saveRunState(validState)
+      }
+      return validState
+    }
+
+    // Step 3: Try migration
     const migrated = migrateRunState(parsed)
-    return migrated
+    validation = RunStateSchema.safeParse(migrated)
+    if (validation.success) {
+      const validState = validation.data as RunState
+      // Write-through migration: if we used old key, write to new key
+      if (usedOldKey) {
+        saveRunState(validState)
+      }
+      return validState
+    }
+
+    // Step 4: Try heal
+    const healed = healRunState(migrated)
+    validation = RunStateSchema.safeParse(healed.rs)
+    if (validation.success) {
+      const validState = validation.data as RunState
+      // Write-through migration: if we used old key, write to new key
+      if (usedOldKey) {
+        saveRunState(validState)
+      }
+      return validState
+    }
+
+    // Step 5: Last resort - reset
+    console.warn('RunState corrupted beyond repair, resetting:', validation.error.issues)
+    const fresh = resetRunState()
+    saveRunState(fresh)
+    return fresh
   } catch (e) {
     console.warn('Failed to load runState:', e)
-    return null
+    const fresh = resetRunState()
+    saveRunState(fresh)
+    return fresh
   }
 }
 
@@ -61,7 +123,9 @@ export function saveRunState(rs: RunState): void {
       ...rs,
       schema_version: CURRENT_SCHEMA_VERSION,
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateWithVersion))
+    // Always save to new key (migration complete)
+    localStorage.setItem(NEW_STORAGE_KEY, JSON.stringify(stateWithVersion))
+    // Note: We don't delete old key automatically to preserve user data
   } catch (e) {
     console.warn('Failed to save runState:', e)
   }
@@ -134,13 +198,40 @@ export function migrateRunState(rs: any): RunState {
     validStatementIds.has(id)
   )
 
-  // Filter invalid history entries
-  rs.history = (rs.history || []).filter((entry: HistoryEntry) => {
-    if (entry.statement_id && !validStatementIds.has(entry.statement_id)) {
-      return false
-    }
-    return true
-  })
+  // Filter invalid history entries, fill missing timestamps, and normalize answers
+  const normalizedHistory: HistoryEntry[] = (rs.history || [])
+    .map((entry: any): HistoryEntry => {
+      const normalized: HistoryEntry = {
+        ...entry,
+      }
+      // Fill missing timestamp_iso (backward compatibility)
+      if (!normalized.timestamp_iso) {
+        normalized.timestamp_iso = new Date().toISOString()
+      }
+      // Normalize answer to valid enum value (backward compatibility)
+      if (entry.answer && typeof entry.answer === 'string') {
+        const answerLower = entry.answer.toLowerCase()
+        if (
+          answerLower === 'yes' ||
+          answerLower === 'no' ||
+          answerLower === 'meh' ||
+          answerLower === 'skip'
+        ) {
+          normalized.answer = answerLower as 'yes' | 'no' | 'meh' | 'skip'
+        } else {
+          // Invalid answer, remove it
+          normalized.answer = undefined
+        }
+      }
+      return normalized
+    })
+    .filter((entry: HistoryEntry) => {
+      if (entry.statement_id && !validStatementIds.has(entry.statement_id)) {
+        return false
+      }
+      return true
+    })
+  rs.history = normalizedHistory
 
   // Migrate presented_statement_ids (new in v2)
   if (!rs.presented_statement_ids || rs.presented_statement_ids.length === 0) {

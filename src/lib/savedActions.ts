@@ -5,6 +5,8 @@
  * Format: string[] of action IDs
  */
 
+import { SavedActionsSchema, safeJsonParse } from './schemas'
+
 const STORAGE_KEY = 'sports-career-swipe:saved-actions:v1'
 
 /**
@@ -18,10 +20,16 @@ export function loadSavedActionIds(): string[] {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (!stored) return []
 
-    const parsed = JSON.parse(stored)
-    if (Array.isArray(parsed)) {
-      return parsed.filter((id): id is string => typeof id === 'string')
+    const parsed = safeJsonParse<unknown>(stored)
+    if (!parsed) return []
+
+    const validation = SavedActionsSchema.safeParse(parsed)
+    if (validation.success) {
+      return validation.data
     }
+
+    // Invalid format, treat as empty
+    console.warn('Invalid saved actions format, resetting:', validation.error.issues)
     return []
   } catch (e) {
     console.warn('Failed to load saved actions:', e)
