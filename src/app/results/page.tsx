@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import type { RunState } from '@/types/schema'
 import { getLaneById } from '@/data/lanes'
 import { cards } from '@/data/cards'
+import { getFiguresByLaneId } from '@/data/figures'
 
 /**
  * Confidence thresholds based on rating gap (top - second):
@@ -21,6 +22,7 @@ function getConfidenceLabel(ratingGap: number): string {
 export default function ResultsPage() {
   const router = useRouter()
   const [runState, setRunState] = useState<RunState | null>(null)
+  const [showAllFigures, setShowAllFigures] = useState(false)
 
   useEffect(() => {
     const stored = localStorage.getItem('runState')
@@ -60,6 +62,10 @@ export default function ResultsPage() {
 
   const topLane = topLaneId ? getLaneById(topLaneId) : null
   const runnerUpLane = runnerUpLaneId ? getLaneById(runnerUpLaneId) : null
+
+  // Get figures for top lane
+  const allFigures = topLaneId ? getFiguresByLaneId(topLaneId) : []
+  const displayedFigures = showAllFigures ? allFigures : allFigures.slice(0, 2)
 
   // Get last 3 choices
   const lastChoices = runState.history.slice(-3).reverse()
@@ -147,6 +153,70 @@ export default function ResultsPage() {
           }}>
             {runnerUpLane.name}
           </h3>
+        </div>
+      )}
+
+      {/* Closest matches section */}
+      {allFigures.length > 0 && (
+        <div style={{
+          padding: '20px',
+          backgroundColor: 'white',
+          borderRadius: '12px',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+          marginBottom: '1.5rem'
+        }}>
+          <h3 style={{
+            fontSize: '1.2rem',
+            fontWeight: '600',
+            marginBottom: '16px'
+          }}>
+            Closest matches
+          </h3>
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px'
+          }}>
+            {displayedFigures.map((figure) => (
+              <div key={figure.id} style={{
+                fontSize: '0.95rem',
+                lineHeight: '1.5'
+              }}>
+                <strong>{figure.name}</strong> — {figure.role}
+                <div style={{
+                  fontSize: '0.85rem',
+                  color: '#666',
+                  marginTop: '4px'
+                }}>
+                  {figure.one_liner}
+                </div>
+              </div>
+            ))}
+          </div>
+          {allFigures.length > 2 && (
+            <button
+              onClick={() => setShowAllFigures(!showAllFigures)}
+              style={{
+                marginTop: '12px',
+                padding: '8px 16px',
+                fontSize: '0.9rem',
+                color: '#0070f3',
+                backgroundColor: 'transparent',
+                border: '1px solid #0070f3',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+              onMouseOver={(e) => {
+                e.currentTarget.style.backgroundColor = '#f0f7ff'
+              }}
+              onMouseOut={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent'
+              }}
+            >
+              {showAllFigures ? 'Show less' : `Show more (${allFigures.length - 2} more)`}
+            </button>
+          )}
         </div>
       )}
 
