@@ -23,7 +23,7 @@ export function DevPanel({ runState }: DevPanelProps) {
 
     const handleKeyPress = (e: KeyboardEvent) => {
       if (e.key === 'd' || e.key === 'D') {
-        setIsOpen(prev => !prev)
+        setIsOpen((prev) => !prev)
       }
     }
 
@@ -34,7 +34,9 @@ export function DevPanel({ runState }: DevPanelProps) {
   if (typeof window === 'undefined' || process.env.NODE_ENV !== 'development') return null
   if (!isOpen) return null
 
-  const validation = runState ? validateRunState(runState) : { ok: false, errors: ['No runState'], warnings: [] }
+  const validation = runState
+    ? validateRunState(runState)
+    : { ok: false, errors: ['No runState'], warnings: [] }
 
   // Get top lanes
   const sortedLanes = runState
@@ -58,13 +60,10 @@ export function DevPanel({ runState }: DevPanelProps) {
   }
 
   return (
-    <div className="fixed bottom-4 right-4 bg-white border-2 border-gray-300 rounded-lg shadow-lg p-4 max-w-sm z-50 text-sm">
-      <div className="flex items-center justify-between mb-3">
+    <div className="fixed bottom-4 right-4 z-50 max-w-sm rounded-lg border-2 border-gray-300 bg-white p-4 text-sm shadow-lg">
+      <div className="mb-3 flex items-center justify-between">
         <h3 className="font-bold text-gray-900">Dev Panel</h3>
-        <button
-          onClick={() => setIsOpen(false)}
-          className="text-gray-500 hover:text-gray-700"
-        >
+        <button onClick={() => setIsOpen(false)} className="text-gray-500 hover:text-gray-700">
           ×
         </button>
       </div>
@@ -78,7 +77,8 @@ export function DevPanel({ runState }: DevPanelProps) {
             <strong>round:</strong> {runState.round} / {runState.max_rounds}
           </div>
           <div>
-            <strong>answers:</strong> {runState.answer_counts?.yes || 0} yes / {runState.answer_counts?.no || 0} no / {runState.answer_counts?.skip || 0} skip
+            <strong>answers:</strong> {runState.answer_counts?.yes || 0} yes /{' '}
+            {runState.answer_counts?.no || 0} no / {runState.answer_counts?.skip || 0} skip
           </div>
           <div>
             <strong>presented stack:</strong> {runState.presented_statement_ids?.length || 0} items
@@ -98,23 +98,29 @@ export function DevPanel({ runState }: DevPanelProps) {
           </div>
 
           {/* Invariant status */}
-          <div className="mt-3 pt-3 border-t border-gray-200">
-            <div className="flex items-center gap-2 mb-1">
+          <div className="mt-3 border-t border-gray-200 pt-3">
+            <div className="mb-1 flex items-center gap-2">
               <strong>Invariants:</strong>
-              <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                validation.ok && validation.warnings.length === 0
-                  ? 'bg-green-100 text-green-800'
-                  : validation.errors.length > 0
-                  ? 'bg-red-100 text-red-800'
-                  : 'bg-yellow-100 text-yellow-800'
-              }`}>
-                {validation.errors.length > 0 ? 'ERROR' : validation.warnings.length > 0 ? 'WARN' : 'OK'}
+              <span
+                className={`rounded px-2 py-0.5 text-xs font-medium ${
+                  validation.ok && validation.warnings.length === 0
+                    ? 'bg-green-100 text-green-800'
+                    : validation.errors.length > 0
+                      ? 'bg-red-100 text-red-800'
+                      : 'bg-yellow-100 text-yellow-800'
+                }`}
+              >
+                {validation.errors.length > 0
+                  ? 'ERROR'
+                  : validation.warnings.length > 0
+                    ? 'WARN'
+                    : 'OK'}
               </span>
             </div>
             {(validation.errors.length > 0 || validation.warnings.length > 0) && (
               <button
                 onClick={() => setShowDetails(!showDetails)}
-                className="text-blue-600 hover:text-blue-700 text-xs underline"
+                className="text-xs text-blue-600 underline hover:text-blue-700"
               >
                 {showDetails ? 'Hide' : 'Show'} details
               </button>
@@ -122,10 +128,14 @@ export function DevPanel({ runState }: DevPanelProps) {
             {showDetails && (
               <div className="mt-2 space-y-1 text-xs">
                 {validation.errors.map((err, idx) => (
-                  <div key={idx} className="text-red-600">✗ {err}</div>
+                  <div key={idx} className="text-red-600">
+                    ✗ {err}
+                  </div>
                 ))}
                 {validation.warnings.map((warn, idx) => (
-                  <div key={idx} className="text-yellow-600">⚠ {warn}</div>
+                  <div key={idx} className="text-yellow-600">
+                    ⚠ {warn}
+                  </div>
                 ))}
               </div>
             )}
@@ -133,7 +143,7 @@ export function DevPanel({ runState }: DevPanelProps) {
 
           <button
             onClick={handleReset}
-            className="mt-3 w-full bg-red-600 hover:bg-red-700 text-white font-medium py-1.5 px-3 rounded text-xs"
+            className="mt-3 w-full rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700"
           >
             Reset Run
           </button>
@@ -144,4 +154,3 @@ export function DevPanel({ runState }: DevPanelProps) {
     </div>
   )
 }
-

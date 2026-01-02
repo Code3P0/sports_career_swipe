@@ -30,7 +30,7 @@ export function getTopSignals(
   n: number = 3
 ): TopSignal[] {
   // Filter history to entries for the top lane
-  const topLaneEntries = runState.history.filter(entry => {
+  const topLaneEntries = runState.history.filter((entry) => {
     // Must have lane_id matching top lane
     if (!entry.lane_id || entry.lane_id !== topLaneId) return false
     // Must have answer (new format)
@@ -39,10 +39,8 @@ export function getTopSignals(
   })
 
   // Map to TopSignal with support scores
-  const signals: TopSignal[] = topLaneEntries.map(entry => {
-    const statement = entry.statement_id
-      ? statementsById.get(entry.statement_id) || null
-      : null
+  const signals: TopSignal[] = topLaneEntries.map((entry) => {
+    const statement = entry.statement_id ? statementsById.get(entry.statement_id) || null : null
 
     // Calculate support score: YES=+1, NO=-1, SKIP/MEH=0
     let supportScore = 0
@@ -57,7 +55,7 @@ export function getTopSignals(
     return {
       entry,
       statement,
-      supportScore
+      supportScore,
     }
   })
 
@@ -80,11 +78,8 @@ export function getTopSignals(
 /**
  * Get summary of YES/NO/SKIP counts for statements mapped to topLaneId
  */
-export function getLaneSupportSummary(
-  runState: RunState,
-  topLaneId: string
-): LaneSupportSummary {
-  const topLaneEntries = runState.history.filter(entry => {
+export function getLaneSupportSummary(runState: RunState, topLaneId: string): LaneSupportSummary {
+  const topLaneEntries = runState.history.filter((entry) => {
     if (!entry.lane_id || entry.lane_id !== topLaneId) return false
     if (!entry.answer) return false
     return true
@@ -94,7 +89,7 @@ export function getLaneSupportSummary(
   let noCount = 0
   let skipCount = 0
 
-  topLaneEntries.forEach(entry => {
+  topLaneEntries.forEach((entry) => {
     if (entry.answer === 'yes') {
       yesCount++
     } else if (entry.answer === 'no') {
@@ -108,7 +103,6 @@ export function getLaneSupportSummary(
     yesCount,
     noCount,
     skipCount,
-    totalCount: topLaneEntries.length
+    totalCount: topLaneEntries.length,
   }
 }
-

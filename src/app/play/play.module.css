@@ -28,4 +28,3 @@
   background: var(--wash-right, var(--wash-left, transparent));
   transition: opacity 0.2s ease;
 }
-

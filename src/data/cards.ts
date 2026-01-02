@@ -12,14 +12,14 @@ export const cards: Card[] = [
       title: 'Renegotiate the deal',
       body: 'Work directly with the sponsor to adjust terms and find a win-win solution.',
       lane_ids: ['partnerships'],
-      tags: ['negotiation', 'relationships']
+      tags: ['negotiation', 'relationships'],
     },
     right: {
       title: 'Redesign the activation',
-      body: 'Create a new activation package that better aligns with the sponsor\'s goals.',
+      body: "Create a new activation package that better aligns with the sponsor's goals.",
       lane_ids: ['partnerships', 'content'],
-      tags: ['creativity', 'strategy']
-    }
+      tags: ['creativity', 'strategy'],
+    },
   },
   {
     id: 'card-2',
@@ -28,15 +28,15 @@ export const cards: Card[] = [
       title: 'Build a content series',
       body: 'Plan and produce a multi-episode series that tells a compelling story.',
       lane_ids: ['content'],
-      tags: ['creativity', 'storytelling']
+      tags: ['creativity', 'storytelling'],
     },
     right: {
       title: 'Optimize ticket pricing',
       body: 'Analyze demand patterns and adjust pricing to maximize revenue.',
       lane_ids: ['growth'],
-      tags: ['analytics', 'revenue']
-    }
-  }
+      tags: ['analytics', 'revenue'],
+    },
+  },
 ]
 
 /**
@@ -46,4 +46,3 @@ export const cards: Card[] = [
 export function getPrimaryLaneId(laneIds: string[]): string | null {
   return laneIds.length > 0 ? laneIds[0] : null
 }
-

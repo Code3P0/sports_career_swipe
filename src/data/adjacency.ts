@@ -1,6 +1,6 @@
 /**
  * Career Map: Lane positions and adjacency relationships
- * 
+ *
  * Positions are normalized to 0-100 for flexible rendering
  * Edit this file to adjust layout and connections
  */
@@ -23,7 +23,7 @@ export const lanePositions: LanePosition[] = [
   { lane_id: 'product', x: 50, y: 70 },
   { lane_id: 'talent', x: 20, y: 60 },
   { lane_id: 'bizops', x: 50, y: 45 },
-  { lane_id: 'nil', x: 5, y: 45 }
+  { lane_id: 'nil', x: 5, y: 45 },
 ]
 
 /**
@@ -39,6 +39,5 @@ export const adjacency: Record<string, string[]> = {
   product: ['content', 'growth', 'bizops', 'community'],
   talent: ['partnerships', 'content', 'bizops'],
   bizops: ['talent', 'product', 'growth', 'partnerships'],
-  nil: ['partnerships', 'bizops']
+  nil: ['partnerships', 'bizops'],
 }
-

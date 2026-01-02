@@ -13,7 +13,7 @@ export type InvariantResult = {
   warnings: string[]
 }
 
-const ALL_LANE_IDS = new Set(lanes.map(l => l.id))
+const ALL_LANE_IDS = new Set(lanes.map((l) => l.id))
 
 /**
  * Validate RunState invariants
@@ -36,9 +36,9 @@ export function validateRunState(rs: RunState | null): InvariantResult {
   // Lane ratings keys match lanes
   const ratingKeys = new Set(Object.keys(rs.lane_ratings || {}))
   const laneIds = ALL_LANE_IDS
-  const missingLanes = [...laneIds].filter(id => !ratingKeys.has(id))
-  const extraLanes = [...ratingKeys].filter(id => !laneIds.has(id))
-  
+  const missingLanes = [...laneIds].filter((id) => !ratingKeys.has(id))
+  const extraLanes = [...ratingKeys].filter((id) => !laneIds.has(id))
+
   if (missingLanes.length > 0) {
     errors.push(`lane_ratings missing lanes: ${missingLanes.join(', ')}`)
   }
@@ -56,14 +56,14 @@ export function validateRunState(rs: RunState | null): InvariantResult {
 
   // Seen statement IDs validation
   const seenIds = rs.seen_statement_ids || []
-  const invalidSeenIds = seenIds.filter(id => !validStatementIds.has(id))
+  const invalidSeenIds = seenIds.filter((id) => !validStatementIds.has(id))
   if (invalidSeenIds.length > 0) {
     errors.push(`seen_statement_ids contains invalid IDs: ${invalidSeenIds.join(', ')}`)
   }
 
   // B) Stack integrity
   const presentedIds = rs.presented_statement_ids || []
-  
+
   if (presentedIds.length < 1) {
     errors.push('presented_statement_ids is empty (must have at least 1)')
   }
@@ -71,25 +71,35 @@ export function validateRunState(rs: RunState | null): InvariantResult {
   if (rs.current_statement_id && presentedIds.length > 0) {
     const lastPresented = presentedIds[presentedIds.length - 1]
     if (rs.current_statement_id !== lastPresented) {
-      errors.push(`current_statement_id "${rs.current_statement_id}" does not match last presented "${lastPresented}"`)
+      errors.push(
+        `current_statement_id "${rs.current_statement_id}" does not match last presented "${lastPresented}"`
+      )
     }
   }
 
   // Check for duplicates in presented stack
   const presentedSet = new Set(presentedIds)
   if (presentedSet.size !== presentedIds.length) {
-    warnings.push(`presented_statement_ids has duplicates (${presentedIds.length} items, ${presentedSet.size} unique)`)
+    warnings.push(
+      `presented_statement_ids has duplicates (${presentedIds.length} items, ${presentedSet.size} unique)`
+    )
   }
 
   // C) History integrity
   const history = rs.history || []
   const answerCounts = rs.answer_counts || { yes: 0, no: 0, skip: 0 }
   const derivedTotal = answerCounts.yes + answerCounts.no + answerCounts.skip
-  
+
   // Count history entries with answers
-  const historyWithAnswers = history.filter(e => e.answer && (e.answer === 'yes' || e.answer === 'no' || e.answer === 'skip' || e.answer === 'meh'))
+  const historyWithAnswers = history.filter(
+    (e) =>
+      e.answer &&
+      (e.answer === 'yes' || e.answer === 'no' || e.answer === 'skip' || e.answer === 'meh')
+  )
   if (historyWithAnswers.length !== derivedTotal) {
-    warnings.push(`history length (${historyWithAnswers.length}) does not match answer_counts total (${derivedTotal})`)
+    warnings.push(
+      `history length (${historyWithAnswers.length}) does not match answer_counts total (${derivedTotal})`
+    )
   }
 
   // Validate history entries
@@ -99,15 +109,15 @@ export function validateRunState(rs: RunState | null): InvariantResult {
     } else if (!validStatementIds.has(entry.statement_id)) {
       warnings.push(`history[${idx}] has invalid statement_id: ${entry.statement_id}`)
     }
-    
+
     if (!entry.lane_id) {
       errors.push(`history[${idx}] missing lane_id`)
     }
-    
+
     if (!entry.answer) {
       errors.push(`history[${idx}] missing answer`)
     }
-    
+
     if (!entry.timestamp_iso) {
       errors.push(`history[${idx}] missing timestamp_iso`)
     }
@@ -116,7 +126,9 @@ export function validateRunState(rs: RunState | null): InvariantResult {
   // Check history statement_ids are in presented stack
   history.forEach((entry, idx) => {
     if (entry.statement_id && !presentedIds.includes(entry.statement_id)) {
-      warnings.push(`history[${idx}] statement_id "${entry.statement_id}" not in presented_statement_ids`)
+      warnings.push(
+        `history[${idx}] statement_id "${entry.statement_id}" not in presented_statement_ids`
+      )
     }
   })
 
@@ -140,7 +152,6 @@ export function validateRunState(rs: RunState | null): InvariantResult {
   return {
     ok: errors.length === 0,
     errors,
-    warnings
+    warnings,
   }
 }
-

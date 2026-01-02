@@ -36,7 +36,6 @@ export function updateElo(
 
   return {
     winner: Math.round(newWinner),
-    loser: Math.round(newLoser)
+    loser: Math.round(newLoser),
   }
 }
-

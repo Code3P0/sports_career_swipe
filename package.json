@@ -6,21 +6,31 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "typecheck": "tsc --noEmit",
     "lint": "next lint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "tsx src/lib/elo.test.ts",
-    "smoke": "tsx src/lib/smoke.ts"
+    "smoke": "tsx src/lib/smoke.ts",
+    "check": "npm run typecheck && npm run format:check && npm run smoke && npm run build",
+    "check:full": "npm run typecheck && npm run lint && npm run format:check && npm run smoke && npm run build"
   },
   "dependencies": {
-    "next": "^14.2.0",
+    "next": "^16.1.1",
     "react": "^18.3.0",
     "react-dom": "^18.3.0"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "^3.3.3",
     "@types/node": "^20.14.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "autoprefixer": "^10.4.23",
+    "eslint": "^9.39.2",
+    "eslint-config-next": "^16.1.1",
     "postcss": "^8.5.6",
+    "prettier": "^3.7.4",
+    "prettier-plugin-tailwindcss": "^0.5.14",
     "tailwindcss": "^3.4.19",
     "tsx": "^4.7.0",
     "typescript": "^5.5.0"

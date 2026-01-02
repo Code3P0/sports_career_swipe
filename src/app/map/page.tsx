@@ -1,16 +1,21 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState, useEffect, useRef, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import type { RunState } from '@/types/schema'
 import { getLaneById } from '@/data/lanes'
 import { lanePositions, adjacency } from '@/data/adjacency'
 import { loadRunState, migrateRunState } from '@/lib/state'
+import { track } from '@/lib/metrics'
 
-export default function MapPage() {
+export const dynamic = 'force-dynamic'
+
+function MapPageContent() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [runState, setRunState] = useState<RunState | null>(null)
   const [selectedLaneId, setSelectedLaneId] = useState<string | null>(null)
+  const mapOpenedTrackedRef = useRef(false)
 
   useEffect(() => {
     const loaded = loadRunState()
@@ -27,18 +32,25 @@ export default function MapPage() {
       // No state - show empty state
       setRunState(null)
     }
-  }, [router])
+
+    // Track map_opened on mount (only once)
+    if (!mapOpenedTrackedRef.current) {
+      const focus = searchParams.get('focus')
+      track('map_opened', { focus_lane_id: focus || null })
+      mapOpenedTrackedRef.current = true
+    }
+  }, [router, searchParams])
 
   if (!runState) {
     return (
       <main className="min-h-screen bg-gray-50">
-        <div className="max-w-md mx-auto px-4 py-6">
-          <div className="text-center py-12">
-            <h1 className="text-2xl font-bold mb-4 text-gray-900">No map data</h1>
-            <p className="text-gray-600 mb-6">Complete a run to see your career map.</p>
+        <div className="mx-auto max-w-md px-4 py-6">
+          <div className="py-12 text-center">
+            <h1 className="mb-4 text-2xl font-bold text-gray-900">No map data</h1>
+            <p className="mb-6 text-gray-600">Complete a run to see your career map.</p>
             <button
               onClick={() => router.push('/play')}
-              className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors duration-200"
+              className="rounded-lg bg-blue-600 px-6 py-3 font-semibold text-white transition-colors duration-200 hover:bg-blue-700"
             >
               Start a run
             </button>
@@ -69,7 +81,7 @@ export default function MapPage() {
         fill: '#0070f3',
         stroke: '#0051cc',
         strokeWidth: strokeWidth * 2,
-        opacity: 1
+        opacity: 1,
       }
     }
     if (laneId === runnerUpLaneId) {
@@ -77,67 +89,73 @@ export default function MapPage() {
         fill: '#4CAF50',
         stroke: '#388e3c',
         strokeWidth: strokeWidth * 1.5,
-        opacity: 0.9
+        opacity: 0.9,
       }
     }
     return {
       fill: '#9e9e9e',
       stroke: '#757575',
       strokeWidth: strokeWidth,
-      opacity: 0.7
+      opacity: 0.7,
     }
   }
 
   // Get selected lane data
   const selectedLane = selectedLaneId ? getLaneById(selectedLaneId) : null
-  const adjacentLanes = selectedLaneId ? (adjacency[selectedLaneId] || []) : []
+  const adjacentLanes = selectedLaneId ? adjacency[selectedLaneId] || [] : []
 
   return (
-    <main style={{
-      minHeight: '100vh',
-      display: 'flex',
-      flexDirection: 'column',
-      padding: '20px',
-      maxWidth: '600px',
-      margin: '0 auto',
-      backgroundColor: '#fafafa'
-    }}>
-      <h1 style={{
-        fontSize: '1.8rem',
-        marginBottom: '1rem',
-        fontWeight: 'bold',
-        textAlign: 'center'
-      }}>
+    <main
+      style={{
+        minHeight: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        padding: '20px',
+        maxWidth: '600px',
+        margin: '0 auto',
+        backgroundColor: '#fafafa',
+      }}
+    >
+      <h1
+        style={{
+          fontSize: '1.8rem',
+          marginBottom: '1rem',
+          fontWeight: 'bold',
+          textAlign: 'center',
+        }}
+      >
         Career Map
       </h1>
 
       {/* Map SVG */}
-      <div style={{
-        width: '100%',
-        aspectRatio: '1 / 1',
-        backgroundColor: 'white',
-        borderRadius: '12px',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-        padding: '20px',
-        marginBottom: '1.5rem',
-        position: 'relative',
-        overflow: 'hidden'
-      }}>
+      <div
+        style={{
+          width: '100%',
+          aspectRatio: '1 / 1',
+          backgroundColor: 'white',
+          borderRadius: '12px',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+          padding: '20px',
+          marginBottom: '1.5rem',
+          position: 'relative',
+          overflow: 'hidden',
+        }}
+      >
         <svg
           viewBox={`0 0 ${svgWidth} ${svgHeight}`}
           style={{
             width: '100%',
             height: '100%',
-            cursor: 'pointer'
+            cursor: 'pointer',
           }}
         >
           {/* Draw edges (adjacency lines) */}
           {lanePositions.map((pos) => {
             const neighbors = adjacency[pos.lane_id] || []
             return neighbors.map((neighborId) => {
-              const neighborPos = lanePositions.find(p => p.lane_id === neighborId)
+              const neighborPos = lanePositions.find((p) => p.lane_id === neighborId)
               if (!neighborPos) return null
-              
+
               // Only draw edge once (avoid duplicates)
               if (pos.lane_id < neighborId) {
                 return (
@@ -161,7 +179,7 @@ export default function MapPage() {
           {lanePositions.map((pos) => {
             const style = getNodeStyle(pos.lane_id)
             const isSelected = selectedLaneId === pos.lane_id
-            
+
             return (
               <g key={pos.lane_id}>
                 {/* Node circle */}
@@ -175,7 +193,7 @@ export default function MapPage() {
                   opacity={style.opacity}
                   style={{
                     cursor: 'pointer',
-                    transition: 'all 0.2s ease'
+                    transition: 'all 0.2s ease',
                   }}
                   onClick={() => setSelectedLaneId(pos.lane_id)}
                   onMouseOver={(e) => {
@@ -184,7 +202,10 @@ export default function MapPage() {
                   }}
                   onMouseOut={(e) => {
                     e.currentTarget.style.opacity = String(style.opacity)
-                    e.currentTarget.setAttribute('r', String(isSelected ? nodeRadius * 1.5 : nodeRadius))
+                    e.currentTarget.setAttribute(
+                      'r',
+                      String(isSelected ? nodeRadius * 1.5 : nodeRadius)
+                    )
                   }}
                 />
                 {/* Lane label */}
@@ -197,7 +218,7 @@ export default function MapPage() {
                   style={{
                     pointerEvents: 'none',
                     userSelect: 'none',
-                    fontWeight: isSelected ? '600' : '400'
+                    fontWeight: isSelected ? '600' : '400',
                   }}
                 >
                   {getLaneById(pos.lane_id)?.name.split(' / ')[0] || pos.lane_id}
@@ -210,32 +231,40 @@ export default function MapPage() {
 
       {/* Info Panel (Bottom Sheet) */}
       {selectedLane && (
-        <div style={{
-          padding: '24px',
-          backgroundColor: 'white',
-          borderRadius: '12px',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-          marginBottom: '1rem'
-        }}>
-          <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'flex-start',
-            marginBottom: '16px'
-          }}>
+        <div
+          style={{
+            padding: '24px',
+            backgroundColor: 'white',
+            borderRadius: '12px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+            marginBottom: '1rem',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start',
+              marginBottom: '16px',
+            }}
+          >
             <div>
-              <h2 style={{
-                fontSize: '1.3rem',
-                fontWeight: '600',
-                marginBottom: '8px'
-              }}>
+              <h2
+                style={{
+                  fontSize: '1.3rem',
+                  fontWeight: '600',
+                  marginBottom: '8px',
+                }}
+              >
                 {selectedLane.name}
               </h2>
-              <p style={{
-                fontSize: '0.95rem',
-                color: '#666',
-                lineHeight: '1.5'
-              }}>
+              <p
+                style={{
+                  fontSize: '0.95rem',
+                  color: '#666',
+                  lineHeight: '1.5',
+                }}
+              >
                 {selectedLane.description}
               </p>
             </div>
@@ -248,7 +277,7 @@ export default function MapPage() {
                 border: 'none',
                 color: '#999',
                 cursor: 'pointer',
-                lineHeight: 1
+                lineHeight: 1,
               }}
             >
               ×
@@ -258,24 +287,28 @@ export default function MapPage() {
           {/* Adjacent lanes */}
           {adjacentLanes.length > 0 && (
             <div>
-              <h3 style={{
-                fontSize: '0.9rem',
-                color: '#666',
-                marginBottom: '12px',
-                textTransform: 'uppercase',
-                letterSpacing: '0.5px'
-              }}>
+              <h3
+                style={{
+                  fontSize: '0.9rem',
+                  color: '#666',
+                  marginBottom: '12px',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
+                }}
+              >
                 Adjacent Lanes
               </h3>
-              <div style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '8px'
-              }}>
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '8px',
+                }}
+              >
                 {adjacentLanes.map((adjLaneId) => {
                   const adjLane = getLaneById(adjLaneId)
                   if (!adjLane) return null
-                  
+
                   return (
                     <button
                       key={adjLaneId}
@@ -289,7 +322,7 @@ export default function MapPage() {
                         borderRadius: '8px',
                         cursor: 'pointer',
                         transition: 'all 0.2s',
-                        color: '#333'
+                        color: '#333',
                       }}
                       onMouseOver={(e) => {
                         e.currentTarget.style.backgroundColor = '#eeeeee'
@@ -300,9 +333,7 @@ export default function MapPage() {
                         e.currentTarget.style.borderColor = '#e0e0e0'
                       }}
                     >
-                      <div style={{ fontWeight: '600', marginBottom: '4px' }}>
-                        {adjLane.name}
-                      </div>
+                      <div style={{ fontWeight: '600', marginBottom: '4px' }}>{adjLane.name}</div>
                       <div style={{ fontSize: '0.85rem', color: '#666' }}>
                         {adjLane.description}
                       </div>
@@ -316,44 +347,52 @@ export default function MapPage() {
       )}
 
       {/* Legend */}
-      <div style={{
-        padding: '16px',
-        backgroundColor: 'white',
-        borderRadius: '12px',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-        marginBottom: '1rem',
-        fontSize: '0.9rem'
-      }}>
+      <div
+        style={{
+          padding: '16px',
+          backgroundColor: 'white',
+          borderRadius: '12px',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+          marginBottom: '1rem',
+          fontSize: '0.9rem',
+        }}
+      >
         <div style={{ marginBottom: '8px', fontWeight: '600' }}>Legend</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div style={{
-              width: '12px',
-              height: '12px',
-              borderRadius: '50%',
-              backgroundColor: '#0070f3',
-              border: '1px solid #0051cc'
-            }} />
+            <div
+              style={{
+                width: '12px',
+                height: '12px',
+                borderRadius: '50%',
+                backgroundColor: '#0070f3',
+                border: '1px solid #0051cc',
+              }}
+            />
             <span>Your Top Lane</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div style={{
-              width: '12px',
-              height: '12px',
-              borderRadius: '50%',
-              backgroundColor: '#4CAF50',
-              border: '1px solid #388e3c'
-            }} />
+            <div
+              style={{
+                width: '12px',
+                height: '12px',
+                borderRadius: '50%',
+                backgroundColor: '#4CAF50',
+                border: '1px solid #388e3c',
+              }}
+            />
             <span>Runner-up</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div style={{
-              width: '12px',
-              height: '12px',
-              borderRadius: '50%',
-              backgroundColor: '#9e9e9e',
-              border: '1px solid #757575'
-            }} />
+            <div
+              style={{
+                width: '12px',
+                height: '12px',
+                borderRadius: '50%',
+                backgroundColor: '#9e9e9e',
+                border: '1px solid #757575',
+              }}
+            />
             <span>Other Lanes</span>
           </div>
         </div>
@@ -372,7 +411,7 @@ export default function MapPage() {
           borderRadius: '8px',
           cursor: 'pointer',
           transition: 'background-color 0.2s',
-          width: '100%'
+          width: '100%',
         }}
         onMouseOver={(e) => {
           e.currentTarget.style.backgroundColor = '#0051cc'
@@ -387,3 +426,20 @@ export default function MapPage() {
   )
 }
 
+export default function MapPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-gray-50">
+          <div className="mx-auto max-w-md px-4 py-6">
+            <div className="py-12 text-center">
+              <p className="text-gray-600">Loading map...</p>
+            </div>
+          </div>
+        </main>
+      }
+    >
+      <MapPageContent />
+    </Suspense>
+  )
+}

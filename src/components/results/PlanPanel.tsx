@@ -6,7 +6,8 @@ import type { Action } from '@/data/actions'
 type PlanPanelProps = {
   actions: Action[]
   savedActionIds: string[]
-  onToggleSave: (actionId: string) => void
+  laneId: string
+  onToggleSave: (actionId: string, laneId: string) => void
   onCopyPlan: () => void
   onShowSaved: () => void
 }
@@ -14,40 +15,39 @@ type PlanPanelProps = {
 export function PlanPanel({
   actions,
   savedActionIds,
+  laneId,
   onToggleSave,
   onCopyPlan,
-  onShowSaved
+  onShowSaved,
 }: PlanPanelProps) {
   const savedCount = savedActionIds.length
 
   return (
     <div className="mb-6">
-      <h2 className="text-xl font-semibold mb-4 text-gray-900">
-        Your 3-step plan (15–60 min)
-      </h2>
-      
-      <div className="space-y-3 mb-4">
+      <h2 className="mb-4 text-xl font-semibold text-gray-900">Your 3-step plan (15–60 min)</h2>
+
+      <div className="mb-4 space-y-3">
         {actions.map((action) => (
           <ActionCard
             key={action.id}
             action={action}
             isSaved={savedActionIds.includes(action.id)}
-            onToggleSave={() => onToggleSave(action.id)}
+            onToggleSave={() => onToggleSave(action.id, laneId)}
           />
         ))}
       </div>
-      
+
       {/* Copy and Saved buttons row */}
       <div className="flex gap-3">
         <button
           onClick={onCopyPlan}
-          className="flex-1 bg-gray-600 hover:bg-gray-700 text-white font-medium py-2.5 px-4 rounded-lg transition-colors duration-200"
+          className="flex-1 rounded-lg bg-gray-600 px-4 py-2.5 font-medium text-white transition-colors duration-200 hover:bg-gray-700"
         >
           Copy plan
         </button>
         <button
           onClick={onShowSaved}
-          className="flex-1 bg-white hover:bg-gray-50 text-gray-700 font-medium py-2.5 px-4 rounded-lg border border-gray-300 transition-colors duration-200"
+          className="flex-1 rounded-lg border border-gray-300 bg-white px-4 py-2.5 font-medium text-gray-700 transition-colors duration-200 hover:bg-gray-50"
         >
           Saved ({savedCount})
         </button>
@@ -55,4 +55,3 @@ export function PlanPanel({
     </div>
   )
 }
-

@@ -48,7 +48,7 @@ test('updateElo: winner rating increases, loser decreases', () => {
   const rWinner = 1000
   const rLoser = 1000
   const { winner, loser } = updateElo(rWinner, rLoser)
-  
+
   assert(winner > rWinner, 'Winner rating should increase')
   assert(loser < rLoser, 'Loser rating should decrease')
 })
@@ -57,14 +57,14 @@ test('updateElo: changes are symmetric-ish (total rating change is small)', () =
   const rWinner = 1000
   const rLoser = 1000
   const { winner, loser } = updateElo(rWinner, rLoser)
-  
+
   const winnerChange = winner - rWinner
   const loserChange = loser - rLoser
-  
+
   // Total change should be close to zero (ELO is zero-sum)
   const totalChange = winnerChange + loserChange
   assert(Math.abs(totalChange) < 1, 'Total rating change should be near zero (zero-sum)')
-  
+
   // Winner gain should roughly equal loser loss
   assert(Math.abs(winnerChange + loserChange) < 1, 'Changes should be roughly symmetric')
 })
@@ -73,16 +73,15 @@ test('updateElo: stronger player beating weaker player gains less', () => {
   const strongWinner = 1200
   const weakLoser = 1000
   const { winner: strongResult } = updateElo(strongWinner, weakLoser)
-  
+
   const weakWinner = 1000
   const strongLoser = 1200
   const { winner: weakResult } = updateElo(weakWinner, strongLoser)
-  
+
   const strongGain = strongResult - strongWinner
   const weakGain = weakResult - weakWinner
-  
+
   assert(weakGain > strongGain, 'Upset (weak beating strong) should gain more points')
 })
 
 console.log('\nAll ELO tests passed! ✓')
-

@@ -16,7 +16,7 @@ const ALL_LANES = [
   'nil',
   'talent',
   'bizops',
-  'product'
+  'product',
 ]
 
 const STORAGE_KEY = 'runState'
@@ -26,7 +26,7 @@ const MAX_ROUNDS = 32
 
 // Initialize all lanes to baseline
 export const INITIAL_LANE_RATINGS: Record<string, number> = Object.fromEntries(
-  ALL_LANES.map(lane => [lane, BASELINE_RATING])
+  ALL_LANES.map((lane) => [lane, BASELINE_RATING])
 )
 
 /**
@@ -35,11 +35,11 @@ export const INITIAL_LANE_RATINGS: Record<string, number> = Object.fromEntries(
  */
 export function loadRunState(): RunState | null {
   if (typeof window === 'undefined') return null
-  
+
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (!stored) return null
-    
+
     const parsed = JSON.parse(stored)
     const migrated = migrateRunState(parsed)
     return migrated
@@ -54,12 +54,12 @@ export function loadRunState(): RunState | null {
  */
 export function saveRunState(rs: RunState): void {
   if (typeof window === 'undefined') return
-  
+
   try {
     // Ensure schema version is set
     const stateWithVersion = {
       ...rs,
-      schema_version: CURRENT_SCHEMA_VERSION
+      schema_version: CURRENT_SCHEMA_VERSION,
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateWithVersion))
   } catch (e) {
@@ -81,7 +81,7 @@ export function resetRunState(): RunState {
     answer_counts: { yes: 0, no: 0, skip: 0 },
     current_statement_id: null,
     presented_statement_ids: [],
-    schema_version: CURRENT_SCHEMA_VERSION
+    schema_version: CURRENT_SCHEMA_VERSION,
   }
 }
 
@@ -90,34 +90,34 @@ export function resetRunState(): RunState {
  */
 export function migrateRunState(rs: any): RunState {
   const validStatementIds = getValidStatementIds()
-  
+
   // Ensure basic structure
   if (!rs || typeof rs !== 'object') {
     return resetRunState()
   }
-  
+
   // Schema version 1 -> 2: Add presented_statement_ids
   const schemaVersion = rs.schema_version || 1
-  
+
   // Migrate lane_ratings
   if (!rs.lane_ratings || Object.keys(rs.lane_ratings).length === 0) {
     rs.lane_ratings = { ...INITIAL_LANE_RATINGS }
   }
-  
+
   // Ensure all lanes exist
   const migratedRatings = { ...INITIAL_LANE_RATINGS }
-  Object.keys(rs.lane_ratings || {}).forEach(lane => {
+  Object.keys(rs.lane_ratings || {}).forEach((lane) => {
     if (ALL_LANES.includes(lane)) {
       migratedRatings[lane] = rs.lane_ratings[lane]
     }
   })
   rs.lane_ratings = migratedRatings
-  
+
   // Migrate max_rounds
   if (!rs.max_rounds || rs.max_rounds !== MAX_ROUNDS) {
     rs.max_rounds = MAX_ROUNDS
   }
-  
+
   // Migrate tracking fields
   if (!rs.seen_statement_ids) {
     rs.seen_statement_ids = []
@@ -128,12 +128,12 @@ export function migrateRunState(rs: any): RunState {
   if (!rs.answer_counts) {
     rs.answer_counts = { yes: 0, no: 0, skip: 0 }
   }
-  
+
   // Filter invalid statement IDs
-  rs.seen_statement_ids = (rs.seen_statement_ids || []).filter((id: string) => 
+  rs.seen_statement_ids = (rs.seen_statement_ids || []).filter((id: string) =>
     validStatementIds.has(id)
   )
-  
+
   // Filter invalid history entries
   rs.history = (rs.history || []).filter((entry: HistoryEntry) => {
     if (entry.statement_id && !validStatementIds.has(entry.statement_id)) {
@@ -141,12 +141,12 @@ export function migrateRunState(rs: any): RunState {
     }
     return true
   })
-  
+
   // Migrate presented_statement_ids (new in v2)
   if (!rs.presented_statement_ids || rs.presented_statement_ids.length === 0) {
     // Build from history + current_statement_id
     rs.presented_statement_ids = []
-    
+
     // Add all statement_ids from history (in order)
     rs.history.forEach((entry: HistoryEntry) => {
       if (entry.statement_id && validStatementIds.has(entry.statement_id)) {
@@ -155,7 +155,7 @@ export function migrateRunState(rs: any): RunState {
         }
       }
     })
-    
+
     // Add current_statement_id as last if valid
     if (rs.current_statement_id && validStatementIds.has(rs.current_statement_id)) {
       // Remove if already present (shouldn't happen, but be safe)
@@ -170,20 +170,20 @@ export function migrateRunState(rs: any): RunState {
       validStatementIds.has(id)
     )
   }
-  
+
   // Ensure current_statement_id matches last presented
   if (rs.presented_statement_ids.length > 0) {
     rs.current_statement_id = rs.presented_statement_ids[rs.presented_statement_ids.length - 1]
   } else if (rs.current_statement_id && !validStatementIds.has(rs.current_statement_id)) {
     rs.current_statement_id = null
   }
-  
+
   // Rebuild derived fields from history
   rs = rebuildDerivedFields(rs)
-  
+
   // Set schema version
   rs.schema_version = CURRENT_SCHEMA_VERSION
-  
+
   return rs as RunState
 }
 
@@ -193,14 +193,14 @@ export function migrateRunState(rs: any): RunState {
  */
 export function rebuildDerivedFields(rs: RunState): RunState {
   const validStatementIds = getValidStatementIds()
-  
+
   // Reset derived fields
   rs.seen_statement_ids = []
   rs.lane_counts_shown = {}
   rs.answer_counts = { yes: 0, no: 0, skip: 0 }
-  
+
   // Rebuild from history
-  rs.history.forEach(entry => {
+  rs.history.forEach((entry) => {
     if (entry.statement_id && validStatementIds.has(entry.statement_id)) {
       if (!rs.seen_statement_ids!.includes(entry.statement_id)) {
         rs.seen_statement_ids!.push(entry.statement_id)
@@ -215,7 +215,7 @@ export function rebuildDerivedFields(rs: RunState): RunState {
       else if (entry.answer === 'skip' || entry.answer === 'meh') rs.answer_counts!.skip++
     }
   })
-  
+
   return rs
 }
 
@@ -226,18 +226,18 @@ export function rebuildDerivedFields(rs: RunState): RunState {
 export function rebuildLaneRatingsFromHistory(history: HistoryEntry[]): Record<string, number> {
   const ratings = { ...INITIAL_LANE_RATINGS }
   const validStatementIds = getValidStatementIds()
-  
-  history.forEach(entry => {
+
+  history.forEach((entry) => {
     // Only process entries with statement_id and answer (new format)
     if (!entry.statement_id || !entry.answer || !entry.lane_id) return
     if (!validStatementIds.has(entry.statement_id)) return
-    
+
     // Skip SKIP/MEH - they don't affect ratings
     if (entry.answer === 'skip' || entry.answer === 'meh') return
-    
+
     const laneId = entry.lane_id
     const currentRating = ratings[laneId] || BASELINE_RATING
-    
+
     // Apply ELO update: YES means lane wins vs baseline, NO means baseline wins vs lane
     if (entry.answer === 'yes') {
       const { winner } = updateElo(currentRating, BASELINE_RATING)
@@ -247,7 +247,6 @@ export function rebuildLaneRatingsFromHistory(history: HistoryEntry[]): Record<s
       ratings[laneId] = loser
     }
   })
-  
+
   return ratings
 }
-

@@ -16,7 +16,7 @@ const ALL_LANES = [
   'nil',
   'talent',
   'bizops',
-  'product'
+  'product',
 ]
 
 export type HealResult = {
@@ -38,7 +38,7 @@ export function healRunState(rs: RunState): HealResult {
 
   // Heal: Missing lane_ratings keys
   const ratingKeys = Object.keys(healedRs.lane_ratings || {})
-  const missingLanes = ALL_LANES.filter(id => !ratingKeys.includes(id))
+  const missingLanes = ALL_LANES.filter((id) => !ratingKeys.includes(id))
   if (missingLanes.length > 0) {
     // Rebuild from baseline and replay history
     healedRs.lane_ratings = rebuildLaneRatingsFromHistory(healedRs.history || [])
@@ -49,7 +49,7 @@ export function healRunState(rs: RunState): HealResult {
   // Heal: Missing presented_statement_ids
   if (!healedRs.presented_statement_ids || healedRs.presented_statement_ids.length === 0) {
     const presented: string[] = []
-    
+
     // Add from history
     const history = healedRs.history || []
     for (let i = 0; i < history.length; i++) {
@@ -60,14 +60,14 @@ export function healRunState(rs: RunState): HealResult {
         }
       }
     }
-    
+
     // Add current if valid
     if (healedRs.current_statement_id && validStatementIds.has(healedRs.current_statement_id)) {
       if (!presented.includes(healedRs.current_statement_id)) {
         presented.push(healedRs.current_statement_id)
       }
     }
-    
+
     healedRs.presented_statement_ids = presented
     notes.push('Rebuilt presented_statement_ids from history + current')
     healed = true
@@ -75,7 +75,10 @@ export function healRunState(rs: RunState): HealResult {
 
   // Heal: current_statement_id != last presented
   const presentedIds = healedRs.presented_statement_ids || []
-  if (presentedIds.length > 0 && healedRs.current_statement_id !== presentedIds[presentedIds.length - 1]) {
+  if (
+    presentedIds.length > 0 &&
+    healedRs.current_statement_id !== presentedIds[presentedIds.length - 1]
+  ) {
     healedRs.current_statement_id = presentedIds[presentedIds.length - 1]
     notes.push(`Fixed current_statement_id to match last presented`)
     healed = true
@@ -92,8 +95,8 @@ export function healRunState(rs: RunState): HealResult {
   if (healedRs.current_statement_id && !validStatementIds.has(healedRs.current_statement_id)) {
     // Try to find first unseen statement
     const seenSet = new Set(healedRs.seen_statement_ids || [])
-    const unseen = statements.find(s => !seenSet.has(s.id))
-    
+    const unseen = statements.find((s) => !seenSet.has(s.id))
+
     if (unseen) {
       healedRs.current_statement_id = unseen.id
       if (!presentedIds.includes(unseen.id)) {
@@ -128,17 +131,18 @@ export function healRunState(rs: RunState): HealResult {
 
   // Heal: Filter invalid IDs from seen_statement_ids
   const seenIds = healedRs.seen_statement_ids || []
-  const validSeenIds = seenIds.filter(id => validStatementIds.has(id))
+  const validSeenIds = seenIds.filter((id) => validStatementIds.has(id))
   if (validSeenIds.length !== seenIds.length) {
     healedRs.seen_statement_ids = validSeenIds
-    notes.push(`Filtered ${seenIds.length - validSeenIds.length} invalid IDs from seen_statement_ids`)
+    notes.push(
+      `Filtered ${seenIds.length - validSeenIds.length} invalid IDs from seen_statement_ids`
+    )
     healed = true
   }
 
   return {
     rs: healedRs,
     healed,
-    notes
+    notes,
   }
 }
-
