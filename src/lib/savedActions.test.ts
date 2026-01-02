@@ -25,11 +25,7 @@ describe('SavedActions', () => {
   })
 
   it('Saved actions valid payload returns array', () => {
-    const validPayloads = [
-      [],
-      ['action-1'],
-      ['action-1', 'action-2', 'action-3'],
-    ]
+    const validPayloads = [[], ['action-1'], ['action-1', 'action-2', 'action-3']]
 
     validPayloads.forEach((payload) => {
       const validation = SavedActionsSchema.safeParse(payload)
@@ -41,4 +37,3 @@ describe('SavedActions', () => {
     })
   })
 })
-
