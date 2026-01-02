@@ -4,8 +4,8 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import type { RunState } from '@/types/schema'
 import { getLaneById } from '@/data/lanes'
-import { cards } from '@/data/cards'
 import { getFiguresByLaneId } from '@/data/figures'
+import { getStatementById } from '@/data/statements'
 
 /**
  * Confidence thresholds based on rating gap (top - second):
@@ -67,7 +67,7 @@ export default function ResultsPage() {
   const allFigures = topLaneId ? getFiguresByLaneId(topLaneId) : []
   const displayedFigures = showAllFigures ? allFigures : allFigures.slice(0, 2)
 
-  // Get last 3 choices
+  // Get last 3 choices (support both new statement format and legacy card format)
   const lastChoices = runState.history.slice(-3).reverse()
 
   return (
@@ -242,28 +242,46 @@ export default function ResultsPage() {
             margin: 0
           }}>
             {lastChoices.map((choice, idx) => {
-              const card = cards.find(c => c.id === choice.card_id)
-              if (!card) return null
+              // New format: statement-based
+              if (choice.statement_id && choice.answer) {
+                const statement = getStatementById(choice.statement_id)
+                if (!statement) return null
+                
+                return (
+                  <li key={idx} style={{
+                    marginBottom: '12px',
+                    paddingLeft: '20px',
+                    position: 'relative'
+                  }}>
+                    <span style={{
+                      position: 'absolute',
+                      left: 0,
+                      color: '#999'
+                    }}>•</span>
+                    <div style={{ fontSize: '0.95rem', lineHeight: '1.5' }}>
+                      <span style={{
+                        fontWeight: '600',
+                        color: choice.answer === 'yes' 
+                          ? '#4CAF50' 
+                          : choice.answer === 'no' 
+                          ? '#f44336' 
+                          : '#9e9e9e',
+                        marginRight: '8px'
+                      }}>
+                        {choice.answer === 'meh' 
+                          ? 'NOT SURE' 
+                          : choice.answer === 'skip'
+                          ? 'SKIP'
+                          : choice.answer.toUpperCase()}
+                      </span>
+                      {statement.text}
+                    </div>
+                  </li>
+                )
+              }
               
-              const pickedSide = choice.picked === 'left' ? card.left : card.right
-              const otherSide = choice.picked === 'left' ? card.right : card.left
-              
-              return (
-                <li key={idx} style={{
-                  marginBottom: '12px',
-                  paddingLeft: '20px',
-                  position: 'relative'
-                }}>
-                  <span style={{
-                    position: 'absolute',
-                    left: 0,
-                    color: '#999'
-                  }}>•</span>
-                  <div style={{ fontSize: '0.95rem', lineHeight: '1.5' }}>
-                    <strong>{pickedSide.title}</strong> (vs {otherSide.title})
-                  </div>
-                </li>
-              )
+              // Legacy format: card-based (for backward compatibility)
+              return null
             })}
           </ul>
         </div>

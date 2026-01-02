@@ -33,8 +33,11 @@ export type Card = {
 };
 
 export type HistoryEntry = {
-  card_id: string;
-  picked: "left" | "right";
+  statement_id?: string; // New format
+  lane_id?: string; // New format
+  answer?: "yes" | "no" | "meh" | "skip"; // New format
+  card_id?: string; // Legacy format
+  picked?: "left" | "right"; // Legacy format
   timestamp_iso: string;
 };
 

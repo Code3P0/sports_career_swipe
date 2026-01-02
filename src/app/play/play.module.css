@@ -1,0 +1,31 @@
+.swipeCard {
+  position: relative;
+  overflow: hidden;
+}
+
+/* Directional glow overlay */
+.swipeCard::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 1;
+  opacity: var(--glow-opacity, 0);
+  background: var(--glow-right, var(--glow-left, none));
+  transition: opacity 0.2s ease;
+}
+
+/* Full-card wash overlay (appears at end zone) */
+.swipeCard::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 2;
+  opacity: var(--wash-opacity, 0);
+  background: var(--wash-right, var(--wash-left, transparent));
+  transition: opacity 0.2s ease;
+}
+
