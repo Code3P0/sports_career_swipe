@@ -4,8 +4,12 @@ import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import type { RunState, HistoryEntry } from '@/types/schema'
 import { updateElo } from '@/lib/elo'
-import { statements, type Statement, getStatementById, getValidStatementIds } from '@/data/statements'
+import { statements, type Statement, getStatementById } from '@/data/statements'
 import { getNextStatement } from '@/lib/selector'
+import { loadRunState, saveRunState, resetRunState, rebuildLaneRatingsFromHistory, rebuildDerivedFields } from '@/lib/state'
+import { validateRunState } from '@/lib/invariants'
+import { healRunState } from '@/lib/heal'
+import { DevPanel } from '@/components/DevPanel'
 import styles from './play.module.css'
 
 // All 8 MVP lanes
@@ -98,121 +102,93 @@ export default function PlayPage() {
   })
   const [isAnimating, setIsAnimating] = useState(false)
   const [exitMode, setExitMode] = useState<'yes' | 'no' | 'skip' | null>(null)
+  const [isPeekOpen, setIsPeekOpen] = useState(false)
   const cardRef = useRef<HTMLDivElement>(null)
-  const undoSnapshotRef = useRef<{ runState: RunState; statementIndex: number } | null>(null)
   const isAdvancingRef = useRef(false) // Guard against double-commit
-
-  // Get valid statement IDs for migration
-  const validStatementIds = getValidStatementIds()
+  const tapStartRef = useRef<{ x: number; y: number; time: number } | null>(null)
 
   // Get current statement from runState.current_statement_id (deterministic)
   const currentStatement: Statement | null = runState?.current_statement_id
     ? getStatementById(runState.current_statement_id) || null
     : null
 
+  // Reset peek when statement changes
   useEffect(() => {
-    // Initialize or load RunState from localStorage
-    const stored = localStorage.getItem('runState')
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored) as RunState
-        // Migrate: if lane_ratings is missing or empty, initialize all lanes
-        if (!parsed.lane_ratings || Object.keys(parsed.lane_ratings).length === 0) {
-          parsed.lane_ratings = { ...INITIAL_LANE_RATINGS }
-        }
-        // Ensure all lanes exist (add missing ones)
-        const migratedRatings = { ...INITIAL_LANE_RATINGS }
-        Object.keys(parsed.lane_ratings).forEach(lane => {
-          if (ALL_LANES.includes(lane)) {
-            migratedRatings[lane] = parsed.lane_ratings[lane]
-          }
-        })
-        parsed.lane_ratings = migratedRatings
-        
-        // Migrate max_rounds if needed
-        if (!parsed.max_rounds || parsed.max_rounds !== MAX_ROUNDS) {
-          parsed.max_rounds = MAX_ROUNDS
-        }
-        
-        // Migrate: add tracking fields if missing
-        if (!parsed.seen_statement_ids) {
-          parsed.seen_statement_ids = []
-        }
-        if (!parsed.lane_counts_shown) {
-          parsed.lane_counts_shown = {}
-        }
-        if (!parsed.answer_counts) {
-          parsed.answer_counts = { yes: 0, no: 0, skip: 0 }
-        }
-        
-        // Filter out invalid statement IDs (handle stale localStorage)
-        parsed.seen_statement_ids = parsed.seen_statement_ids.filter(id => validStatementIds.has(id))
-        
-        // Rebuild tracking from history (filtering invalid entries)
-        parsed.history = parsed.history.filter(entry => {
-          if (entry.statement_id && !validStatementIds.has(entry.statement_id)) {
-            return false // Remove invalid history entries
-          }
-          return true
-        })
-        
-        parsed.history.forEach(entry => {
-          if (entry.statement_id && validStatementIds.has(entry.statement_id) && !parsed.seen_statement_ids!.includes(entry.statement_id)) {
-            parsed.seen_statement_ids!.push(entry.statement_id)
-          }
-          if (entry.lane_id) {
-            parsed.lane_counts_shown![entry.lane_id] = (parsed.lane_counts_shown![entry.lane_id] || 0) + 1
-          }
-          if (entry.answer) {
-            if (entry.answer === 'yes') parsed.answer_counts!.yes++
-            else if (entry.answer === 'no') parsed.answer_counts!.no++
-            else if (entry.answer === 'skip' || entry.answer === 'meh') parsed.answer_counts!.skip++
-          }
-        })
-        
-        // Validate current_statement_id
-        if (parsed.current_statement_id && !validStatementIds.has(parsed.current_statement_id)) {
-          parsed.current_statement_id = null // Invalid ID, will select new one
-        }
-        
-        // If no current_statement_id, select next statement
-        if (!parsed.current_statement_id) {
-          const next = getNextStatement(statements, parsed)
-          if (next) {
-            parsed.current_statement_id = next.id
-          } else {
-            // No statements available, route to results
-            router.push('/results')
+    setIsPeekOpen(false)
+  }, [currentStatement?.id])
+
+  useEffect(() => {
+    // Load or initialize RunState using centralized state module
+    const loaded = loadRunState()
+    if (loaded) {
+      // Validate and heal in dev
+      if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
+        const validation = validateRunState(loaded)
+        if (!validation.ok || validation.warnings.length > 0) {
+          console.warn('[Dev] RunState validation issues:', {
+            errors: validation.errors,
+            warnings: validation.warnings
+          })
+          
+          // Heal once
+          const healed = healRunState(loaded)
+          if (healed.healed) {
+            console.warn('[Dev] Auto-healed RunState:', healed.notes)
+            saveRunState(healed.rs)
+            
+            // Re-validate after heal
+            const reValidation = validateRunState(healed.rs)
+            if (!reValidation.ok) {
+              console.error('[Dev] RunState still has errors after heal:', reValidation.errors)
+            }
+            
+            // Use healed state
+            const finalState = healed.rs
+            if (!finalState.current_statement_id) {
+              const next = getNextStatement(statements, finalState)
+              if (next) {
+                finalState.current_statement_id = next.id
+                finalState.presented_statement_ids = [...(finalState.presented_statement_ids || []), next.id]
+                saveRunState(finalState)
+              } else {
+                router.push('/results')
+                return
+              }
+            }
+            setRunState(finalState)
             return
           }
         }
-        
-        setRunState(parsed)
-      } catch (e) {
-        // If parsing fails, initialize new state
-        initializeRunState()
       }
+      
+      // If no current_statement_id, select next statement
+      if (!loaded.current_statement_id) {
+        const next = getNextStatement(statements, loaded)
+        if (next) {
+          loaded.current_statement_id = next.id
+          loaded.presented_statement_ids = [...(loaded.presented_statement_ids || []), next.id]
+          saveRunState(loaded)
+        } else {
+          // No statements available, route to results
+          router.push('/results')
+          return
+        }
+      }
+      setRunState(loaded)
     } else {
       initializeRunState()
     }
   }, [])
 
   const initializeRunState = () => {
-    const newState: RunState = {
-      round: 1,
-      max_rounds: MAX_ROUNDS,
-      lane_ratings: { ...INITIAL_LANE_RATINGS },
-      history: [],
-      seen_statement_ids: [],
-      lane_counts_shown: {},
-      answer_counts: { yes: 0, no: 0, skip: 0 },
-      current_statement_id: null
-    }
+    const newState = resetRunState()
     
     // Select first statement
     const firstStatement = getNextStatement(statements, newState)
     if (firstStatement) {
       newState.current_statement_id = firstStatement.id
+      newState.presented_statement_ids = [firstStatement.id]
+      saveRunState(newState)
     } else {
       // No statements available, route to results
       router.push('/results')
@@ -220,8 +196,6 @@ export default function PlayPage() {
     }
     
     setRunState(newState)
-    localStorage.setItem('runState', JSON.stringify(newState))
-    undoSnapshotRef.current = null // Clear undo on new run
   }
   
   // Check if we can finish early
@@ -259,12 +233,6 @@ export default function PlayPage() {
 
     // Set guard to prevent double-commit
     isAdvancingRef.current = true
-
-    // Store snapshot for undo before making changes
-    undoSnapshotRef.current = {
-      runState: JSON.parse(JSON.stringify(runState)),
-      statementIndex: 0 // Not used anymore but kept for compatibility
-    }
 
     setIsAnimating(true)
     setExitMode(answer)
@@ -309,6 +277,12 @@ export default function PlayPage() {
 
     const newRound = runState.round + 1
     
+    // Update presented_statement_ids: add current statement if not already present
+    const presentedIds = [...(runState.presented_statement_ids || [])]
+    if (!presentedIds.includes(currentStatement.id)) {
+      presentedIds.push(currentStatement.id)
+    }
+    
     // Check if this will exceed max rounds BEFORE updating state
     if (newRound > MAX_ROUNDS) {
       // Final answer - commit to history but route immediately
@@ -320,10 +294,11 @@ export default function PlayPage() {
         seen_statement_ids: seenIds,
         lane_counts_shown: laneCounts,
         answer_counts: answerCounts,
-        current_statement_id: null
+        current_statement_id: null,
+        presented_statement_ids: presentedIds
       }
       setRunState(finalState)
-      localStorage.setItem('runState', JSON.stringify(finalState))
+      saveRunState(finalState)
       router.push('/results')
       isAdvancingRef.current = false
       return
@@ -338,7 +313,8 @@ export default function PlayPage() {
       seen_statement_ids: seenIds,
       lane_counts_shown: laneCounts,
       answer_counts: answerCounts,
-      current_statement_id: null // Clear current to select next
+      current_statement_id: null, // Clear current to select next
+      presented_statement_ids: presentedIds
     }
     
     const nextStatement = getNextStatement(statements, tempState)
@@ -350,19 +326,23 @@ export default function PlayPage() {
         current_statement_id: null
       }
       setRunState(finalState)
-      localStorage.setItem('runState', JSON.stringify(finalState))
+      saveRunState(finalState)
       router.push('/results')
       isAdvancingRef.current = false
       return
     }
     
+    // Add next statement to presented stack
+    const updatedPresentedIds = [...presentedIds, nextStatement.id]
+    
     const updatedState: RunState = {
       ...tempState,
-      current_statement_id: nextStatement.id
+      current_statement_id: nextStatement.id,
+      presented_statement_ids: updatedPresentedIds
     }
 
     setRunState(updatedState)
-    localStorage.setItem('runState', JSON.stringify(updatedState))
+    saveRunState(updatedState)
 
     // Animate card off-screen, then move to next statement
     setTimeout(() => {
@@ -396,12 +376,6 @@ export default function PlayPage() {
     // Set guard to prevent double-commit
     isAdvancingRef.current = true
 
-    // Store snapshot for undo before making changes
-    undoSnapshotRef.current = {
-      runState: JSON.parse(JSON.stringify(runState)),
-      statementIndex: 0
-    }
-
     setIsAnimating(true)
     setExitMode('skip') // Use skip animation for meh too
     
@@ -427,6 +401,12 @@ export default function PlayPage() {
     const answerCounts = { ...(runState.answer_counts || { yes: 0, no: 0, skip: 0 }) }
     answerCounts.skip++
 
+    // Update presented_statement_ids: add current statement if not already present
+    const presentedIds = [...(runState.presented_statement_ids || [])]
+    if (!presentedIds.includes(currentStatement.id)) {
+      presentedIds.push(currentStatement.id)
+    }
+    
     const newRound = runState.round + 1
     
     // Check if this will exceed max rounds BEFORE updating state
@@ -440,10 +420,11 @@ export default function PlayPage() {
         seen_statement_ids: seenIds,
         lane_counts_shown: laneCounts,
         answer_counts: answerCounts,
-        current_statement_id: null
+        current_statement_id: null,
+        presented_statement_ids: presentedIds
       }
       setRunState(finalState)
-      localStorage.setItem('runState', JSON.stringify(finalState))
+      saveRunState(finalState)
       router.push('/results')
       isAdvancingRef.current = false
       return
@@ -458,7 +439,8 @@ export default function PlayPage() {
       seen_statement_ids: seenIds,
       lane_counts_shown: laneCounts,
       answer_counts: answerCounts,
-      current_statement_id: null // Clear current to select next
+      current_statement_id: null, // Clear current to select next
+      presented_statement_ids: presentedIds
     }
     
     const nextStatement = getNextStatement(statements, tempState)
@@ -470,19 +452,23 @@ export default function PlayPage() {
         current_statement_id: null
       }
       setRunState(finalState)
-      localStorage.setItem('runState', JSON.stringify(finalState))
+      saveRunState(finalState)
       router.push('/results')
       isAdvancingRef.current = false
       return
     }
     
+    // Add next statement to presented stack
+    const updatedPresentedIds = [...presentedIds, nextStatement.id]
+    
     const updatedState: RunState = {
       ...tempState,
-      current_statement_id: nextStatement.id
+      current_statement_id: nextStatement.id,
+      presented_statement_ids: updatedPresentedIds
     }
 
     setRunState(updatedState)
-    localStorage.setItem('runState', JSON.stringify(updatedState))
+    saveRunState(updatedState)
 
     // Animate card with skip dissolve, then move to next statement
     setTimeout(() => {
@@ -516,12 +502,6 @@ export default function PlayPage() {
     // Set guard to prevent double-commit
     isAdvancingRef.current = true
 
-    // Store snapshot for undo before making changes
-    undoSnapshotRef.current = {
-      runState: JSON.parse(JSON.stringify(runState)),
-      statementIndex: 0
-    }
-
     setIsAnimating(true)
     setExitMode('skip')
     
@@ -547,6 +527,12 @@ export default function PlayPage() {
     const answerCounts = { ...(runState.answer_counts || { yes: 0, no: 0, skip: 0 }) }
     answerCounts.skip++
 
+    // Update presented_statement_ids: add current statement if not already present
+    const presentedIds = [...(runState.presented_statement_ids || [])]
+    if (!presentedIds.includes(currentStatement.id)) {
+      presentedIds.push(currentStatement.id)
+    }
+    
     const newRound = runState.round + 1
     
     // Check if this will exceed max rounds BEFORE updating state
@@ -560,10 +546,11 @@ export default function PlayPage() {
         seen_statement_ids: seenIds,
         lane_counts_shown: laneCounts,
         answer_counts: answerCounts,
-        current_statement_id: null
+        current_statement_id: null,
+        presented_statement_ids: presentedIds
       }
       setRunState(finalState)
-      localStorage.setItem('runState', JSON.stringify(finalState))
+      saveRunState(finalState)
       router.push('/results')
       isAdvancingRef.current = false
       return
@@ -578,7 +565,8 @@ export default function PlayPage() {
       seen_statement_ids: seenIds,
       lane_counts_shown: laneCounts,
       answer_counts: answerCounts,
-      current_statement_id: null // Clear current to select next
+      current_statement_id: null, // Clear current to select next
+      presented_statement_ids: presentedIds
     }
     
     const nextStatement = getNextStatement(statements, tempState)
@@ -590,19 +578,23 @@ export default function PlayPage() {
         current_statement_id: null
       }
       setRunState(finalState)
-      localStorage.setItem('runState', JSON.stringify(finalState))
+      saveRunState(finalState)
       router.push('/results')
       isAdvancingRef.current = false
       return
     }
     
+    // Add next statement to presented stack
+    const updatedPresentedIds = [...presentedIds, nextStatement.id]
+    
     const updatedState: RunState = {
       ...tempState,
-      current_statement_id: nextStatement.id
+      current_statement_id: nextStatement.id,
+      presented_statement_ids: updatedPresentedIds
     }
 
     setRunState(updatedState)
-    localStorage.setItem('runState', JSON.stringify(updatedState))
+    saveRunState(updatedState)
 
     // Animate card with skip dissolve, then move to next statement
     setTimeout(() => {
@@ -623,27 +615,57 @@ export default function PlayPage() {
     }, SKIP_ANIMATION_DURATION)
   }
 
-  // Undo logic: restore previous state (deterministic - restores exact statement)
+  // Undo logic: restore previous state using deterministic stack replay
   const handleUndo = () => {
-    if (!undoSnapshotRef.current || isAnimating) return
-
-    const snapshot = undoSnapshotRef.current
-    // Restore the exact state including current_statement_id
-    setRunState(snapshot.runState)
-    localStorage.setItem('runState', JSON.stringify(snapshot.runState))
-    undoSnapshotRef.current = null
-    // currentStatement is derived from runState.current_statement_id, so it will update automatically
+    if (!runState || isAnimating) return
+    
+    const presentedIds = runState.presented_statement_ids || []
+    
+    // If presented stack has <= 1 item, nothing to undo
+    if (presentedIds.length <= 1) return
+    
+    // Pop the last presented id
+    const newPresentedIds = presentedIds.slice(0, -1)
+    const previousStatementId = newPresentedIds[newPresentedIds.length - 1] || null
+    
+    // Remove the last history entry
+    const newHistory = runState.history.slice(0, -1)
+    
+    // Rebuild lane_ratings by replaying history from baseline
+    const rebuiltRatings = rebuildLaneRatingsFromHistory(newHistory)
+    
+    // Rebuild derived fields
+    const rebuiltState: RunState = {
+      ...runState,
+      round: Math.max(1, runState.round - 1),
+      lane_ratings: rebuiltRatings,
+      history: newHistory,
+      current_statement_id: previousStatementId,
+      presented_statement_ids: newPresentedIds
+    }
+    
+    const finalState = rebuildDerivedFields(rebuiltState)
+    
+    setRunState(finalState)
+    saveRunState(finalState)
   }
 
   // Swipe handlers
   const handlePointerDown = (e: React.PointerEvent) => {
     if (isAnimating) return
     const clientX = e.clientX || (e as any).touches?.[0]?.clientX || 0
+    const clientY = e.clientY || (e as any).touches?.[0]?.clientY || 0
     setDragState({
       isDragging: true,
       startX: clientX,
       currentX: clientX
     })
+    // Track tap start for peek detection
+    tapStartRef.current = {
+      x: clientX,
+      y: clientY,
+      time: Date.now()
+    }
     const element = cardRef.current
     if (element) {
       element.setPointerCapture(e.pointerId)
@@ -674,7 +696,29 @@ export default function PlayPage() {
       // Swipe right = YES, swipe left = NO
       const answer = deltaX > 0 ? 'yes' : 'no'
       commitChoice(answer)
+      tapStartRef.current = null // Clear tap tracking on swipe
     } else {
+      // Check if this was a tap (not a swipe)
+      const tapStart = tapStartRef.current
+      if (tapStart) {
+        const clientX = e.clientX || (e as any).changedTouches?.[0]?.clientX || 0
+        const clientY = e.clientY || (e as any).changedTouches?.[0]?.clientY || 0
+        const deltaX = Math.abs(clientX - tapStart.x)
+        const deltaY = Math.abs(clientY - tapStart.y)
+        const deltaTime = Date.now() - tapStart.time
+        const TAP_THRESHOLD = 18 // pixels
+        const TAP_TIME_THRESHOLD = 450 // ms
+        
+        // If movement is small and time is short, treat as tap
+        if (deltaX < TAP_THRESHOLD && deltaY < TAP_THRESHOLD && deltaTime < TAP_TIME_THRESHOLD) {
+          // Toggle peek if statement has peek data
+          if (currentStatement && (currentStatement.roles || currentStatement.example)) {
+            setIsPeekOpen(prev => !prev)
+          }
+        }
+        tapStartRef.current = null
+      }
+      
       // Reset position if threshold not met
       setDragState({
         isDragging: false,
@@ -784,26 +828,26 @@ export default function PlayPage() {
           {/* Undo button */}
           <button
             onClick={handleUndo}
-            disabled={!undoSnapshotRef.current || isAnimating}
+            disabled={(runState?.presented_statement_ids?.length || 0) <= 1 || isAnimating}
             style={{
               padding: '6px 12px',
               fontSize: '0.85rem',
               fontWeight: '500',
-              backgroundColor: undoSnapshotRef.current && !isAnimating ? '#666' : '#ccc',
+              backgroundColor: (runState?.presented_statement_ids?.length || 0) > 1 && !isAnimating ? '#666' : '#ccc',
               color: 'white',
               border: 'none',
               borderRadius: '6px',
-              cursor: undoSnapshotRef.current && !isAnimating ? 'pointer' : 'not-allowed',
+              cursor: (runState?.presented_statement_ids?.length || 0) > 1 && !isAnimating ? 'pointer' : 'not-allowed',
               transition: 'background-color 0.2s',
-              opacity: undoSnapshotRef.current && !isAnimating ? 1 : 0.5
+              opacity: (runState?.presented_statement_ids?.length || 0) > 1 && !isAnimating ? 1 : 0.5
             }}
             onMouseOver={(e) => {
-              if (undoSnapshotRef.current && !isAnimating) {
+              if ((runState?.presented_statement_ids?.length || 0) > 1 && !isAnimating) {
                 e.currentTarget.style.backgroundColor = '#555'
               }
             }}
             onMouseOut={(e) => {
-              if (undoSnapshotRef.current && !isAnimating) {
+              if ((runState?.presented_statement_ids?.length || 0) > 1 && !isAnimating) {
                 e.currentTarget.style.backgroundColor = '#666'
               }
             }}
@@ -919,6 +963,117 @@ export default function PlayPage() {
         }}>
           {currentStatement.text}
         </p>
+
+        {/* Peek details section */}
+        {isPeekOpen && (currentStatement.roles || currentStatement.example) && (
+          <div style={{
+            marginTop: '20px',
+            paddingTop: '20px',
+            borderTop: '1px solid #e0e0e0',
+            position: 'relative',
+            zIndex: 3,
+            width: '100%'
+          }}>
+            {currentStatement.roles && currentStatement.roles.length > 0 && (
+              <div style={{ marginBottom: '12px' }}>
+                <div style={{
+                  fontSize: '0.85rem',
+                  fontWeight: '600',
+                  color: '#666',
+                  marginBottom: '6px',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px'
+                }}>
+                  Roles:
+                </div>
+                <ul style={{
+                  listStyle: 'none',
+                  padding: 0,
+                  margin: 0,
+                  fontSize: '0.95rem',
+                  color: '#333'
+                }}>
+                  {currentStatement.roles.map((role, idx) => (
+                    <li key={idx} style={{
+                      marginBottom: '4px',
+                      paddingLeft: '16px',
+                      position: 'relative'
+                    }}>
+                      <span style={{
+                        position: 'absolute',
+                        left: 0,
+                        color: '#999'
+                      }}>•</span>
+                      {role}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {currentStatement.example && (
+              <div>
+                <div style={{
+                  fontSize: '0.85rem',
+                  fontWeight: '600',
+                  color: '#666',
+                  marginBottom: '6px',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px'
+                }}>
+                  Example:
+                </div>
+                <p style={{
+                  fontSize: '0.95rem',
+                  color: '#333',
+                  lineHeight: '1.5',
+                  margin: 0
+                }}>
+                  {currentStatement.example}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Clickable Details affordance */}
+        {currentStatement && (currentStatement.roles || currentStatement.example) && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              setIsPeekOpen(prev => !prev)
+            }}
+            style={{
+              marginTop: '16px',
+              padding: '8px 12px',
+              fontSize: '0.85rem',
+              color: '#666',
+              backgroundColor: 'transparent',
+              border: '1px solid #e0e0e0',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+              position: 'relative',
+              zIndex: 3,
+              transition: 'all 0.2s',
+              width: 'auto',
+              alignSelf: 'center'
+            }}
+            onMouseOver={(e) => {
+              e.currentTarget.style.backgroundColor = '#f5f5f5'
+              e.currentTarget.style.borderColor = '#999'
+            }}
+            onMouseOut={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent'
+              e.currentTarget.style.borderColor = '#e0e0e0'
+            }}
+          >
+            <span style={{ fontSize: '1rem' }}>ⓘ</span>
+            <span>{isPeekOpen ? 'Hide details' : 'Details'}</span>
+          </button>
+        )}
       </div>
 
       {/* Yes/No/Skip buttons */}
@@ -1019,6 +1174,9 @@ export default function PlayPage() {
       }}>
         Swipe right for YES, left for NO
       </div>
+
+      {/* Dev Panel */}
+      <DevPanel runState={runState} />
     </main>
   )
 }

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import type { RunState } from '@/types/schema'
 import { getLaneById } from '@/data/lanes'
 import { lanePositions, adjacency } from '@/data/adjacency'
+import { loadRunState, migrateRunState } from '@/lib/state'
 
 export default function MapPage() {
   const router = useRouter()
@@ -12,23 +13,39 @@ export default function MapPage() {
   const [selectedLaneId, setSelectedLaneId] = useState<string | null>(null)
 
   useEffect(() => {
-    const stored = localStorage.getItem('runState')
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored) as RunState
-        setRunState(parsed)
-      } catch (e) {
-        // If no valid state, redirect to play
-        router.push('/play')
+    const loaded = loadRunState()
+    if (loaded) {
+      // Validate lane_ratings exist and are valid
+      if (!loaded.lane_ratings || Object.keys(loaded.lane_ratings).length === 0) {
+        // Migrate or reset
+        const migrated = migrateRunState(loaded)
+        setRunState(migrated)
+      } else {
+        setRunState(loaded)
       }
     } else {
-      // No state found, redirect to play
-      router.push('/play')
+      // No state - show empty state
+      setRunState(null)
     }
   }, [router])
 
   if (!runState) {
-    return <div>Loading...</div>
+    return (
+      <main className="min-h-screen bg-gray-50">
+        <div className="max-w-md mx-auto px-4 py-6">
+          <div className="text-center py-12">
+            <h1 className="text-2xl font-bold mb-4 text-gray-900">No map data</h1>
+            <p className="text-gray-600 mb-6">Complete a run to see your career map.</p>
+            <button
+              onClick={() => router.push('/play')}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors duration-200"
+            >
+              Start a run
+            </button>
+          </div>
+        </div>
+      </main>
+    )
   }
 
   // Get top 2 lanes from ratings

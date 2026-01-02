@@ -64,6 +64,10 @@ export type RunState = {
   };
   // Current statement persistence (for deterministic undo)
   current_statement_id?: string | null;
+  // Deterministic presented stack (new in schema v2)
+  presented_statement_ids?: string[]; // Ordered list of statements user has seen
+  // Schema version for migration
+  schema_version?: number;
 };
 
 export type NorthStarFigure = {

@@ -7,6 +7,8 @@ export type Statement = {
   id: string
   text: string
   lane_id: string
+  roles?: string[] // Max 2 roles for peek details
+  example?: string // 1 sentence example project
 }
 
 export const statements: Statement[] = [
@@ -14,7 +16,9 @@ export const statements: Statement[] = [
   {
     id: 'stmt-partnerships-1',
     text: 'I like building long-term relationships with corporate partners',
-    lane_id: 'partnerships'
+    lane_id: 'partnerships',
+    roles: ['Partnership Manager', 'Sponsorship Director'],
+    example: 'Renew a 3-year deal with a major sponsor by demonstrating ROI through fan engagement metrics.'
   },
   {
     id: 'stmt-partnerships-2',
@@ -36,7 +40,9 @@ export const statements: Statement[] = [
   {
     id: 'stmt-content-1',
     text: 'I enjoy planning content series that tell compelling stories',
-    lane_id: 'content'
+    lane_id: 'content',
+    roles: ['Content Strategist', 'Media Producer'],
+    example: 'Plan a 6-episode documentary series following a team\'s journey through the season.'
   },
   {
     id: 'stmt-content-2',
@@ -58,7 +64,9 @@ export const statements: Statement[] = [
   {
     id: 'stmt-community-1',
     text: 'I like creating experiences that bring people together',
-    lane_id: 'community'
+    lane_id: 'community',
+    roles: ['Community Manager', 'Events Coordinator'],
+    example: 'Design a fan meetup event that combines networking, exclusive content, and team access.'
   },
   {
     id: 'stmt-community-2',
@@ -80,7 +88,9 @@ export const statements: Statement[] = [
   {
     id: 'stmt-growth-1',
     text: 'I enjoy optimizing pricing strategies to maximize revenue',
-    lane_id: 'growth'
+    lane_id: 'growth',
+    roles: ['Growth Analyst', 'Revenue Manager'],
+    example: 'A/B test dynamic pricing tiers for playoff tickets to optimize conversion and revenue.'
   },
   {
     id: 'stmt-growth-2',
@@ -102,7 +112,9 @@ export const statements: Statement[] = [
   {
     id: 'stmt-nil-1',
     text: 'I like navigating complex rules and compliance requirements',
-    lane_id: 'nil'
+    lane_id: 'nil',
+    roles: ['NIL Coordinator', 'Compliance Officer'],
+    example: 'Structure a compliant NIL deal for a student-athlete with a local business partner.'
   },
   {
     id: 'stmt-nil-2',
@@ -124,7 +136,9 @@ export const statements: Statement[] = [
   {
     id: 'stmt-talent-1',
     text: 'I enjoy aligning talent with brand partnerships',
-    lane_id: 'talent'
+    lane_id: 'talent',
+    roles: ['Talent Manager', 'Creator Partnerships Lead'],
+    example: 'Match a creator with a brand campaign that aligns with both their audience and brand values.'
   },
   {
     id: 'stmt-talent-2',
@@ -146,7 +160,9 @@ export const statements: Statement[] = [
   {
     id: 'stmt-bizops-1',
     text: 'I like framing complex problems and finding solutions',
-    lane_id: 'bizops'
+    lane_id: 'bizops',
+    roles: ['Business Operations Manager', 'Strategy Lead'],
+    example: 'Frame a cross-functional initiative to improve fan retention across all touchpoints.'
   },
   {
     id: 'stmt-bizops-2',
@@ -168,7 +184,9 @@ export const statements: Statement[] = [
   {
     id: 'stmt-product-1',
     text: 'I enjoy designing digital experiences that enhance fan engagement',
-    lane_id: 'product'
+    lane_id: 'product',
+    roles: ['Product Manager', 'UX Designer'],
+    example: 'Design a mobile feature that lets fans vote on in-game decisions in real-time.'
   },
   {
     id: 'stmt-product-2',

@@ -1,0 +1,253 @@
+/**
+ * Centralized state management for RunState
+ * Handles storage, migration, and deterministic state rebuilding
+ */
+
+import type { RunState, HistoryEntry } from '@/types/schema'
+import { updateElo } from './elo'
+import { getValidStatementIds } from '@/data/statements'
+
+// All 8 MVP lanes (shared constant)
+const ALL_LANES = [
+  'partnerships',
+  'content',
+  'community',
+  'growth',
+  'nil',
+  'talent',
+  'bizops',
+  'product'
+]
+
+const STORAGE_KEY = 'runState'
+const CURRENT_SCHEMA_VERSION = 2
+const BASELINE_RATING = 1000
+const MAX_ROUNDS = 32
+
+// Initialize all lanes to baseline
+export const INITIAL_LANE_RATINGS: Record<string, number> = Object.fromEntries(
+  ALL_LANES.map(lane => [lane, BASELINE_RATING])
+)
+
+/**
+ * Load RunState from localStorage
+ * Returns null if not found or invalid
+ */
+export function loadRunState(): RunState | null {
+  if (typeof window === 'undefined') return null
+  
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY)
+    if (!stored) return null
+    
+    const parsed = JSON.parse(stored)
+    const migrated = migrateRunState(parsed)
+    return migrated
+  } catch (e) {
+    console.warn('Failed to load runState:', e)
+    return null
+  }
+}
+
+/**
+ * Save RunState to localStorage
+ */
+export function saveRunState(rs: RunState): void {
+  if (typeof window === 'undefined') return
+  
+  try {
+    // Ensure schema version is set
+    const stateWithVersion = {
+      ...rs,
+      schema_version: CURRENT_SCHEMA_VERSION
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateWithVersion))
+  } catch (e) {
+    console.warn('Failed to save runState:', e)
+  }
+}
+
+/**
+ * Reset RunState to initial state
+ */
+export function resetRunState(): RunState {
+  return {
+    round: 1,
+    max_rounds: MAX_ROUNDS,
+    lane_ratings: { ...INITIAL_LANE_RATINGS },
+    history: [],
+    seen_statement_ids: [],
+    lane_counts_shown: {},
+    answer_counts: { yes: 0, no: 0, skip: 0 },
+    current_statement_id: null,
+    presented_statement_ids: [],
+    schema_version: CURRENT_SCHEMA_VERSION
+  }
+}
+
+/**
+ * Migrate RunState from older schema versions
+ */
+export function migrateRunState(rs: any): RunState {
+  const validStatementIds = getValidStatementIds()
+  
+  // Ensure basic structure
+  if (!rs || typeof rs !== 'object') {
+    return resetRunState()
+  }
+  
+  // Schema version 1 -> 2: Add presented_statement_ids
+  const schemaVersion = rs.schema_version || 1
+  
+  // Migrate lane_ratings
+  if (!rs.lane_ratings || Object.keys(rs.lane_ratings).length === 0) {
+    rs.lane_ratings = { ...INITIAL_LANE_RATINGS }
+  }
+  
+  // Ensure all lanes exist
+  const migratedRatings = { ...INITIAL_LANE_RATINGS }
+  Object.keys(rs.lane_ratings || {}).forEach(lane => {
+    if (ALL_LANES.includes(lane)) {
+      migratedRatings[lane] = rs.lane_ratings[lane]
+    }
+  })
+  rs.lane_ratings = migratedRatings
+  
+  // Migrate max_rounds
+  if (!rs.max_rounds || rs.max_rounds !== MAX_ROUNDS) {
+    rs.max_rounds = MAX_ROUNDS
+  }
+  
+  // Migrate tracking fields
+  if (!rs.seen_statement_ids) {
+    rs.seen_statement_ids = []
+  }
+  if (!rs.lane_counts_shown) {
+    rs.lane_counts_shown = {}
+  }
+  if (!rs.answer_counts) {
+    rs.answer_counts = { yes: 0, no: 0, skip: 0 }
+  }
+  
+  // Filter invalid statement IDs
+  rs.seen_statement_ids = (rs.seen_statement_ids || []).filter((id: string) => 
+    validStatementIds.has(id)
+  )
+  
+  // Filter invalid history entries
+  rs.history = (rs.history || []).filter((entry: HistoryEntry) => {
+    if (entry.statement_id && !validStatementIds.has(entry.statement_id)) {
+      return false
+    }
+    return true
+  })
+  
+  // Migrate presented_statement_ids (new in v2)
+  if (!rs.presented_statement_ids || rs.presented_statement_ids.length === 0) {
+    // Build from history + current_statement_id
+    rs.presented_statement_ids = []
+    
+    // Add all statement_ids from history (in order)
+    rs.history.forEach((entry: HistoryEntry) => {
+      if (entry.statement_id && validStatementIds.has(entry.statement_id)) {
+        if (!rs.presented_statement_ids.includes(entry.statement_id)) {
+          rs.presented_statement_ids.push(entry.statement_id)
+        }
+      }
+    })
+    
+    // Add current_statement_id as last if valid
+    if (rs.current_statement_id && validStatementIds.has(rs.current_statement_id)) {
+      // Remove if already present (shouldn't happen, but be safe)
+      rs.presented_statement_ids = rs.presented_statement_ids.filter(
+        (id: string) => id !== rs.current_statement_id
+      )
+      rs.presented_statement_ids.push(rs.current_statement_id)
+    }
+  } else {
+    // Filter invalid IDs from presented_statement_ids
+    rs.presented_statement_ids = rs.presented_statement_ids.filter((id: string) =>
+      validStatementIds.has(id)
+    )
+  }
+  
+  // Ensure current_statement_id matches last presented
+  if (rs.presented_statement_ids.length > 0) {
+    rs.current_statement_id = rs.presented_statement_ids[rs.presented_statement_ids.length - 1]
+  } else if (rs.current_statement_id && !validStatementIds.has(rs.current_statement_id)) {
+    rs.current_statement_id = null
+  }
+  
+  // Rebuild derived fields from history
+  rs = rebuildDerivedFields(rs)
+  
+  // Set schema version
+  rs.schema_version = CURRENT_SCHEMA_VERSION
+  
+  return rs as RunState
+}
+
+/**
+ * Rebuild derived fields from history
+ * Recomputes seen_statement_ids, lane_counts_shown, answer_counts from history
+ */
+export function rebuildDerivedFields(rs: RunState): RunState {
+  const validStatementIds = getValidStatementIds()
+  
+  // Reset derived fields
+  rs.seen_statement_ids = []
+  rs.lane_counts_shown = {}
+  rs.answer_counts = { yes: 0, no: 0, skip: 0 }
+  
+  // Rebuild from history
+  rs.history.forEach(entry => {
+    if (entry.statement_id && validStatementIds.has(entry.statement_id)) {
+      if (!rs.seen_statement_ids!.includes(entry.statement_id)) {
+        rs.seen_statement_ids!.push(entry.statement_id)
+      }
+    }
+    if (entry.lane_id) {
+      rs.lane_counts_shown![entry.lane_id] = (rs.lane_counts_shown![entry.lane_id] || 0) + 1
+    }
+    if (entry.answer) {
+      if (entry.answer === 'yes') rs.answer_counts!.yes++
+      else if (entry.answer === 'no') rs.answer_counts!.no++
+      else if (entry.answer === 'skip' || entry.answer === 'meh') rs.answer_counts!.skip++
+    }
+  })
+  
+  return rs
+}
+
+/**
+ * Rebuild lane_ratings by replaying history from baseline
+ * Used for deterministic undo
+ */
+export function rebuildLaneRatingsFromHistory(history: HistoryEntry[]): Record<string, number> {
+  const ratings = { ...INITIAL_LANE_RATINGS }
+  const validStatementIds = getValidStatementIds()
+  
+  history.forEach(entry => {
+    // Only process entries with statement_id and answer (new format)
+    if (!entry.statement_id || !entry.answer || !entry.lane_id) return
+    if (!validStatementIds.has(entry.statement_id)) return
+    
+    // Skip SKIP/MEH - they don't affect ratings
+    if (entry.answer === 'skip' || entry.answer === 'meh') return
+    
+    const laneId = entry.lane_id
+    const currentRating = ratings[laneId] || BASELINE_RATING
+    
+    // Apply ELO update: YES means lane wins vs baseline, NO means baseline wins vs lane
+    if (entry.answer === 'yes') {
+      const { winner } = updateElo(currentRating, BASELINE_RATING)
+      ratings[laneId] = winner
+    } else if (entry.answer === 'no') {
+      const { loser } = updateElo(BASELINE_RATING, currentRating)
+      ratings[laneId] = loser
+    }
+  })
+  
+  return ratings
+}
+
