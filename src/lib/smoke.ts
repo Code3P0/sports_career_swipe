@@ -13,9 +13,10 @@ import {
 import { validateRunState } from './invariants'
 import { healRunState } from './heal'
 import { RunStateSchema } from './schemas'
-import { updateElo } from './elo'
 import { statements } from '@/data/statements'
 import { getNextStatement } from './selector'
+import { ensureCurrentStatement } from './prime'
+import { updateElo } from './elo'
 
 const BASELINE_RATING = 1000
 
@@ -454,6 +455,183 @@ function testStorageKeyMigration(): void {
 }
 
 /**
+ * Test reset clears both keys and returns fresh state
+ */
+function testResetClearsBothKeys(): void {
+  console.log('🧪 Test: Reset Clears Both Keys')
+
+  // Simulate legacy key with almost-complete run
+  const mockStorage: Record<string, string> = {}
+  const oldKey = 'runState'
+  const newKey = 'sports-career-swipe:run-state:v1'
+
+  const almostCompleteRun: any = {
+    round: 31,
+    max_rounds: 32,
+    lane_ratings: {
+      partnerships: 1100,
+      content: 1000,
+      community: 1000,
+      growth: 1000,
+      nil: 1000,
+      talent: 1000,
+      bizops: 1000,
+      product: 1000,
+    },
+    history: Array.from({ length: 30 }, (_, i) => ({
+      statement_id: `stmt-${i}`,
+      lane_id: 'partnerships',
+      answer: 'yes',
+      timestamp_iso: new Date().toISOString(),
+    })),
+    seen_statement_ids: Array.from({ length: 30 }, (_, i) => `stmt-${i}`),
+    lane_counts_shown: { partnerships: 30 },
+    answer_counts: { yes: 30, no: 0, skip: 0 },
+    current_statement_id: 'stmt-30',
+    presented_statement_ids: Array.from({ length: 31 }, (_, i) => `stmt-${i}`),
+    schema_version: 1,
+  }
+
+  // Seed both keys with old state
+  mockStorage[oldKey] = JSON.stringify(almostCompleteRun)
+  mockStorage[newKey] = JSON.stringify(almostCompleteRun)
+
+  // Simulate resetRunState clearing both keys
+  delete mockStorage[oldKey]
+  delete mockStorage[newKey]
+
+  // Simulate resetRunState saving fresh state
+  const freshState = {
+    round: 1,
+    max_rounds: 32,
+    lane_ratings: {
+      partnerships: 1000,
+      content: 1000,
+      community: 1000,
+      growth: 1000,
+      nil: 1000,
+      talent: 1000,
+      bizops: 1000,
+      product: 1000,
+    },
+    history: [],
+    seen_statement_ids: [],
+    lane_counts_shown: {},
+    answer_counts: { yes: 0, no: 0, skip: 0 },
+    current_statement_id: null,
+    presented_statement_ids: [],
+    schema_version: 2,
+  }
+
+  mockStorage[newKey] = JSON.stringify(freshState)
+
+  // Verify fresh state is saved
+  if (!mockStorage[newKey]) {
+    throw new Error('Fresh state should be saved to new key')
+  }
+
+  const loaded = JSON.parse(mockStorage[newKey])
+
+  // Verify it's a fresh state
+  if (loaded.round !== 1) {
+    throw new Error(`Expected round 1, got ${loaded.round}`)
+  }
+  if (loaded.history.length !== 0) {
+    throw new Error(`Expected empty history, got length ${loaded.history.length}`)
+  }
+  if (
+    loaded.answer_counts.yes !== 0 ||
+    loaded.answer_counts.no !== 0 ||
+    loaded.answer_counts.skip !== 0
+  ) {
+    throw new Error('Answer counts should be reset to zero')
+  }
+
+  // Verify old key is gone (so loadRunState won't fall back)
+  if (mockStorage[oldKey]) {
+    throw new Error('Old key should be removed on reset')
+  }
+
+  console.log('✅ PASS: Reset clears both keys')
+}
+
+/**
+ * Test priming empty current statement
+ */
+function testPrimeOnEmptyCurrent(): void {
+  console.log('🧪 Test: Prime On Empty Current Statement')
+
+  // Case A: empty stack -> primes stack to [next.id] and sets current
+  const fresh = resetRunState()
+  const emptyState: RunState = {
+    ...fresh,
+    current_statement_id: null,
+    presented_statement_ids: [],
+  }
+
+  const resultA = ensureCurrentStatement(emptyState, statements)
+
+  if (!resultA.changed) {
+    throw new Error('Case A: Should have changed state (empty stack)')
+  }
+
+  const primedStateA = resultA.rs
+
+  if (!primedStateA.current_statement_id) {
+    throw new Error('Case A: Primed state should have current_statement_id')
+  }
+  if (!primedStateA.presented_statement_ids || primedStateA.presented_statement_ids.length !== 1) {
+    throw new Error('Case A: Primed state should have exactly 1 entry in presented_statement_ids')
+  }
+  if (primedStateA.current_statement_id !== primedStateA.presented_statement_ids[0]) {
+    throw new Error('Case A: current_statement_id should match first presented_statement_id')
+  }
+
+  // Case B: stack has ids but current null -> sets current to last id, does not append new id
+  const stateWithStack: RunState = {
+    ...fresh,
+    current_statement_id: null,
+    presented_statement_ids: ['stmt-partnerships-1', 'stmt-content-1'],
+  }
+
+  if (
+    !stateWithStack.presented_statement_ids ||
+    stateWithStack.presented_statement_ids.length === 0
+  ) {
+    throw new Error('Case B: stateWithStack should have presented_statement_ids')
+  }
+
+  const lastId =
+    stateWithStack.presented_statement_ids[stateWithStack.presented_statement_ids.length - 1]
+
+  // Verify lastId is a valid statement ID
+  const isValidStatement = statements.some((s) => s.id === lastId)
+  if (!isValidStatement) {
+    throw new Error('Case B: Last statement in stack should be valid')
+  }
+
+  const resultB = ensureCurrentStatement(stateWithStack, statements)
+
+  if (!resultB.changed) {
+    throw new Error('Case B: Should have changed state (current was null)')
+  }
+
+  const primedStateB = resultB.rs
+
+  if (primedStateB.current_statement_id !== lastId) {
+    throw new Error('Case B: current_statement_id should be restored from last stack item')
+  }
+  if (!primedStateB.presented_statement_ids || primedStateB.presented_statement_ids.length !== 2) {
+    throw new Error('Case B: presented_statement_ids should not be modified (still length 2)')
+  }
+  if (primedStateB.presented_statement_ids[1] !== lastId) {
+    throw new Error('Case B: Last item in stack should match restored current_statement_id')
+  }
+
+  console.log('✅ PASS: Prime on empty current statement (both cases)')
+}
+
+/**
  * Run all smoke tests
  */
 function runSmokeTests(): void {
@@ -465,6 +643,8 @@ function runSmokeTests(): void {
     testCorruptionRecovery()
     testBackwardCompatibility()
     testStorageKeyMigration()
+    testResetClearsBothKeys()
+    testPrimeOnEmptyCurrent()
 
     console.log('\n✅ ALL TESTS PASSED')
     process.exit(0)

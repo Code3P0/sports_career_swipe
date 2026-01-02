@@ -6,6 +6,7 @@ import type { RunState, HistoryEntry } from '@/types/schema'
 import { updateElo } from '@/lib/elo'
 import { statements, type Statement, getStatementById } from '@/data/statements'
 import { getNextStatement } from '@/lib/selector'
+import { ensureCurrentStatement } from '@/lib/prime'
 import {
   loadRunState,
   saveRunState,
@@ -126,8 +127,17 @@ export default function PlayPage() {
 
   useEffect(() => {
     // Load or initialize RunState using centralized state module
-    const loaded = loadRunState()
+    let loaded = loadRunState()
     if (loaded) {
+      // Prime state with current statement if needed (before validation/healing)
+      const primedResult = ensureCurrentStatement(loaded, statements)
+      if (primedResult.changed) {
+        loaded = primedResult.rs
+        saveRunState(loaded)
+      } else {
+        loaded = primedResult.rs
+      }
+
       // Validate and heal in dev
       if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
         const validation = validateRunState(loaded)
@@ -143,47 +153,37 @@ export default function PlayPage() {
             console.warn('[Dev] Auto-healed RunState:', healed.notes)
             saveRunState(healed.rs)
 
-            // Re-validate after heal
-            const reValidation = validateRunState(healed.rs)
+            // Ensure current statement after heal
+            const primedAfterHealResult = ensureCurrentStatement(healed.rs, statements)
+            const primedAfterHeal = primedAfterHealResult.rs
+            if (primedAfterHealResult.changed) {
+              saveRunState(primedAfterHeal)
+            }
+
+            // Re-validate after heal + prime
+            const reValidation = validateRunState(primedAfterHeal)
             if (!reValidation.ok) {
               console.error('[Dev] RunState still has errors after heal:', reValidation.errors)
             }
 
-            // Use healed state
-            const finalState = healed.rs
-            if (!finalState.current_statement_id) {
-              const next = getNextStatement(statements, finalState)
-              if (next) {
-                finalState.current_statement_id = next.id
-                finalState.presented_statement_ids = [
-                  ...(finalState.presented_statement_ids || []),
-                  next.id,
-                ]
-                saveRunState(finalState)
-              } else {
-                router.push('/results')
-                return
-              }
+            // Check if no statement available after priming
+            if (!primedAfterHeal.current_statement_id) {
+              router.push('/results')
+              return
             }
-            setRunState(finalState)
+
+            setRunState(primedAfterHeal)
             return
           }
         }
       }
 
-      // If no current_statement_id, select next statement
+      // Check if no statement available after priming
       if (!loaded.current_statement_id) {
-        const next = getNextStatement(statements, loaded)
-        if (next) {
-          loaded.current_statement_id = next.id
-          loaded.presented_statement_ids = [...(loaded.presented_statement_ids || []), next.id]
-          saveRunState(loaded)
-        } else {
-          // No statements available, route to results
-          router.push('/results')
-          return
-        }
+        router.push('/results')
+        return
       }
+
       setRunState(loaded)
     } else {
       initializeRunState()

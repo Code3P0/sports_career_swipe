@@ -133,9 +133,16 @@ export function saveRunState(rs: RunState): void {
 
 /**
  * Reset RunState to initial state
+ * On explicit reset (restart), clears both storage keys to prevent fallback to old state
  */
 export function resetRunState(): RunState {
-  return {
+  if (typeof window !== 'undefined') {
+    // Clear both keys on explicit reset to prevent fallback to old completed run
+    localStorage.removeItem(NEW_STORAGE_KEY)
+    localStorage.removeItem(OLD_STORAGE_KEY)
+  }
+
+  const freshState: RunState = {
     round: 1,
     max_rounds: MAX_ROUNDS,
     lane_ratings: { ...INITIAL_LANE_RATINGS },
@@ -147,6 +154,13 @@ export function resetRunState(): RunState {
     presented_statement_ids: [],
     schema_version: CURRENT_SCHEMA_VERSION,
   }
+
+  // Save fresh state to new key
+  if (typeof window !== 'undefined') {
+    saveRunState(freshState)
+  }
+
+  return freshState
 }
 
 /**

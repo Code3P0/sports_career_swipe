@@ -7,6 +7,8 @@ import { getLaneById } from '@/data/lanes'
 import { getFiguresByLaneId, type NotableFigure } from '@/data/figures'
 import { getStatementById, statements } from '@/data/statements'
 import { getActionsByLaneId, type Action } from '@/data/actions'
+import { getArtifactForLane } from '@/data/artifacts'
+import { getLaneGuide } from '@/data/laneGuides'
 import { loadSavedActionIds, toggleSavedAction } from '@/lib/savedActions'
 import { getTopSignals, getLaneSupportSummary, type TopSignal } from '@/lib/explain'
 import { loadRunState, resetRunState, migrateRunState } from '@/lib/state'
@@ -16,8 +18,7 @@ import { track } from '@/lib/metrics'
 import { resetOnboarding } from '@/lib/onboarding'
 import { DevPanel } from '@/components/DevPanel'
 import { ResultsHero } from '@/components/results/ResultsHero'
-import { PlanPanel } from '@/components/results/PlanPanel'
-import { ExploreAccordion } from '@/components/results/ExploreAccordion'
+import { ResultsAccordion } from '@/components/results/ResultsAccordion'
 import { WhySheet } from '@/components/results/WhySheet'
 import { SavedSheet } from '@/components/results/SavedSheet'
 
@@ -56,9 +57,12 @@ export default function ResultsPage() {
   const router = useRouter()
   const [runState, setRunState] = useState<RunState | null>(null)
   const [savedActionIds, setSavedActionIds] = useState<string[]>([])
-  const [showPlan, setShowPlan] = useState(false)
+  const [activeSection, setActiveSection] = useState<
+    'learn_more' | 'next_steps' | 'explore' | null
+  >('learn_more')
   const [whySheetOpen, setWhySheetOpen] = useState(false)
   const [savedSheetOpen, setSavedSheetOpen] = useState(false)
+  const [artifactCopied, setArtifactCopied] = useState(false)
   const firstActionTimeRef = useRef<number | null>(null)
   const runCompletedTrackedRef = useRef(false)
 
@@ -136,9 +140,8 @@ export default function ResultsPage() {
   }, [router])
 
   const handleReset = () => {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('runState')
-    }
+    resetRunState()
+    track('run_restarted', { from: 'results' })
     router.push('/play')
   }
 
@@ -151,6 +154,46 @@ export default function ResultsPage() {
     const isNowSaved = updated.includes(actionId)
     if (isNowSaved && !wasSaved) {
       track('action_saved', { lane_id: laneId, action_id: actionId })
+    }
+  }
+
+  const handleCopyArtifact = async () => {
+    if (!runState || !topLaneId || !topLane) return
+
+    const artifact = getArtifactForLane(topLaneId)
+    if (!artifact) return
+
+    const artifactText = artifact.template({
+      topLaneName: topLane.name,
+      topLaneDesc: topLane.description,
+      runnerUpLaneName: runnerUpLane?.name,
+      actions: actions,
+    })
+
+    try {
+      await navigator.clipboard.writeText(artifactText)
+      track('artifact_copied', { lane_id: topLaneId, artifact_id: artifact.id })
+      setArtifactCopied(true)
+      setTimeout(() => setArtifactCopied(false), 1500)
+    } catch (err) {
+      // Fallback: create textarea and select
+      const textarea = document.createElement('textarea')
+      textarea.value = artifactText
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      try {
+        document.execCommand('copy')
+        track('artifact_copied', { lane_id: topLaneId, artifact_id: artifact.id })
+        setArtifactCopied(true)
+        setTimeout(() => setArtifactCopied(false), 1500)
+      } catch (fallbackErr) {
+        console.error('Failed to copy artifact:', fallbackErr)
+        alert('Failed to copy. Please try again.')
+      } finally {
+        document.body.removeChild(textarea)
+      }
     }
   }
 
@@ -208,25 +251,44 @@ export default function ResultsPage() {
     track('plan_copied')
   }
 
-  const handleStartPlan = () => {
-    if (firstActionTimeRef.current === null) {
-      firstActionTimeRef.current = Date.now()
-      const timeToFirstAction =
-        firstActionTimeRef.current - (performance.timing?.navigationStart || Date.now())
-      track('plan_started', { time_to_first_primary_action_ms: timeToFirstAction })
+  const handleSectionToggle = (section: 'learn_more' | 'next_steps' | 'explore') => {
+    if (!topLaneId) return
+
+    // Toggle: if already open, close it; otherwise open it
+    const newSection = activeSection === section ? null : section
+    setActiveSection(newSection)
+
+    // Track section open (not when closing)
+    if (newSection !== null) {
+      track('results_section_opened', { section: newSection, lane_id: topLaneId })
     }
-    setShowPlan(true)
+
+    // Scroll to section header
+    if (newSection !== null) {
+      setTimeout(() => {
+        const sectionId = `section-${newSection.replace('_', '-')}`
+        const sectionEl = document.getElementById(sectionId)
+        if (sectionEl) {
+          sectionEl.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        }
+      }, 100)
+    }
+  }
+
+  const handleExamplesExpanded = () => {
+    if (!topLaneId) return
+    track('examples_expanded', { lane_id: topLaneId })
   }
 
   const handleExploreMap = () => {
-    track('map_cta_clicked')
-
-    const sortedLanes = Object.entries(runState?.lane_ratings || {})
+    if (!runState) return
+    const sortedLanes = Object.entries(runState.lane_ratings || {})
       .sort(([, a], [, b]) => b - a)
       .slice(0, 1)
     const topLaneId = sortedLanes[0]?.[0]
 
     if (topLaneId) {
+      track('map_cta_clicked', { from: 'results_explore_section', lane_id: topLaneId })
       router.push(`/map?focus=${topLaneId}`)
     } else {
       router.push('/map')
@@ -292,25 +354,33 @@ export default function ResultsPage() {
           topLane={topLane || null}
           runnerUpLane={runnerUpLane || null}
           confidenceLabel={confidenceLabel}
-          onStartPlan={handleStartPlan}
-          onExploreMap={handleExploreMap}
+          activeSection={activeSection}
+          onSectionToggle={handleSectionToggle}
           onWhyClick={() => setWhySheetOpen(true)}
         />
 
-        {/* Plan mode (default when user taps "Start my 3-step plan") */}
-        {showPlan && (
-          <PlanPanel
-            actions={actions}
-            savedActionIds={savedActionIds}
-            laneId={topLaneId || ''}
-            onToggleSave={handleToggleSave}
-            onCopyPlan={handleCopyPlan}
-            onShowSaved={() => setSavedSheetOpen(true)}
-          />
+        {/* Accordion sections */}
+        {topLaneId && topLane && (
+          <div id="results-accordion" className="mt-6">
+            <ResultsAccordion
+              topLane={topLane}
+              topLaneId={topLaneId}
+              actions={actions}
+              savedActionIds={savedActionIds}
+              artifactCopied={artifactCopied}
+              onToggleSave={handleToggleSave}
+              onCopyPlan={handleCopyPlan}
+              onShowSaved={() => setSavedSheetOpen(true)}
+              onCopyArtifact={handleCopyArtifact}
+              laneGuide={getLaneGuide(topLaneId)}
+              figures={allFigures}
+              onExamplesExpanded={handleExamplesExpanded}
+              onExploreMap={handleExploreMap}
+              activeSection={activeSection}
+              onSectionToggle={handleSectionToggle}
+            />
+          </div>
         )}
-
-        {/* Explore accordion (collapsed by default) */}
-        {showPlan && <ExploreAccordion figures={allFigures} />}
 
         {/* Start New Run button (always visible at bottom) */}
         <button

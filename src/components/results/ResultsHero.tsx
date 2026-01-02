@@ -6,8 +6,8 @@ type ResultsHeroProps = {
   topLane: Lane | null
   runnerUpLane: Lane | null
   confidenceLabel: string
-  onStartPlan: () => void
-  onExploreMap: () => void
+  activeSection: 'learn_more' | 'next_steps' | 'explore' | null
+  onSectionToggle: (section: 'learn_more' | 'next_steps' | 'explore') => void
   onWhyClick: () => void
 }
 
@@ -15,8 +15,8 @@ export function ResultsHero({
   topLane,
   runnerUpLane,
   confidenceLabel,
-  onStartPlan,
-  onExploreMap,
+  activeSection,
+  onSectionToggle,
   onWhyClick,
 }: ResultsHeroProps) {
   if (!topLane) return null
@@ -39,19 +39,37 @@ export function ResultsHero({
         </div>
       )}
 
-      {/* Two primary buttons */}
+      {/* Three section buttons */}
       <div className="mb-6 w-full max-w-sm space-y-3">
         <button
-          onClick={onStartPlan}
-          className="w-full rounded-lg bg-blue-600 px-6 py-4 font-semibold text-white transition-colors duration-200 hover:bg-blue-700"
+          onClick={() => onSectionToggle('learn_more')}
+          className={`w-full rounded-lg px-6 py-4 font-semibold transition-colors duration-200 ${
+            activeSection === 'learn_more'
+              ? 'bg-blue-600 text-white hover:bg-blue-700'
+              : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+          }`}
         >
-          Start my 3-step plan
+          Learn More
         </button>
         <button
-          onClick={onExploreMap}
-          className="w-full rounded-lg border border-gray-300 bg-white px-6 py-4 font-semibold text-gray-700 transition-colors duration-200 hover:bg-gray-50"
+          onClick={() => onSectionToggle('next_steps')}
+          className={`w-full rounded-lg px-6 py-4 font-semibold transition-colors duration-200 ${
+            activeSection === 'next_steps'
+              ? 'bg-blue-600 text-white hover:bg-blue-700'
+              : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+          }`}
         >
-          Explore the map
+          Next Steps
+        </button>
+        <button
+          onClick={() => onSectionToggle('explore')}
+          className={`w-full rounded-lg px-6 py-4 font-semibold transition-colors duration-200 ${
+            activeSection === 'explore'
+              ? 'bg-blue-600 text-white hover:bg-blue-700'
+              : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+          }`}
+        >
+          Explore
         </button>
       </div>
 
