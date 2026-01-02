@@ -8,15 +8,29 @@ import { getFiguresByLaneId } from '@/data/figures'
 import { getStatementById } from '@/data/statements'
 
 /**
- * Confidence thresholds based on rating gap (top - second):
- * Strong: >= 80 points
- * Medium: >= 40 points
- * Weak: < 40 points
+ * Confidence thresholds incorporating rating gap and signal quality:
+ * Strong: big gap (>= 80) + good signal (skipRate <= 0.35)
+ * Medium: moderate gap (>= 40) OR higher skip rate
+ * Weak/Exploratory: small gap (< 40) OR very high skip rate (> 0.5)
  */
-function getConfidenceLabel(ratingGap: number): string {
-  if (ratingGap >= 80) return 'Strong'
-  if (ratingGap >= 40) return 'Medium'
-  return 'Weak'
+function getConfidenceLabel(ratingGap: number, skipRate: number): string {
+  const hasBigGap = ratingGap >= 80
+  const hasModerateGap = ratingGap >= 40
+  const hasGoodSignal = skipRate <= 0.35
+  const hasVeryHighSkip = skipRate > 0.5
+  
+  if (hasBigGap && hasGoodSignal) return 'Strong'
+  if (hasModerateGap && hasGoodSignal) return 'Medium'
+  if (hasVeryHighSkip) return 'Exploratory'
+  if (!hasModerateGap) return 'Weak'
+  return 'Medium'
+}
+
+/**
+ * Get signal quality label
+ */
+function getSignalQuality(skipRate: number): string {
+  return skipRate <= 0.35 ? 'Good' : 'Low'
 }
 
 export default function ResultsPage() {
@@ -66,6 +80,13 @@ export default function ResultsPage() {
   // Get figures for top lane
   const allFigures = topLaneId ? getFiguresByLaneId(topLaneId) : []
   const displayedFigures = showAllFigures ? allFigures : allFigures.slice(0, 2)
+
+  // Get answer counts
+  const answerCounts = runState.answer_counts || { yes: 0, no: 0, skip: 0 }
+  const totalAnswers = answerCounts.yes + answerCounts.no + answerCounts.skip
+  const skipRate = totalAnswers > 0 ? answerCounts.skip / totalAnswers : 0
+  const signalQuality = getSignalQuality(skipRate)
+  const confidenceLabel = getConfidenceLabel(ratingGap, skipRate)
 
   // Get last 3 choices (support both new statement format and legacy card format)
   const lastChoices = runState.history.slice(-3).reverse()
@@ -123,9 +144,20 @@ export default function ResultsPage() {
           <div style={{
             marginTop: '12px',
             fontSize: '0.9rem',
-            color: '#999'
+            color: '#666',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '4px'
           }}>
-            Confidence: {getConfidenceLabel(ratingGap)}
+            <div>
+              Confidence: <strong>{confidenceLabel}</strong>
+            </div>
+            <div style={{ fontSize: '0.85rem', color: '#999' }}>
+              Signal quality: {signalQuality}
+            </div>
+            <div style={{ fontSize: '0.85rem', color: '#999' }}>
+              Answers: {answerCounts.yes} Yes / {answerCounts.no} No / {answerCounts.skip} Skip
+            </div>
           </div>
         </div>
       )}

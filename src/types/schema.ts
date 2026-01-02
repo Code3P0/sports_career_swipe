@@ -54,6 +54,16 @@ export type RunState = {
   lane_ratings: Record<string, number>;
   history: HistoryEntry[];
   convergence?: Convergence;
+  // Adaptive tracking fields
+  seen_statement_ids?: string[];
+  lane_counts_shown?: Record<string, number>;
+  answer_counts?: {
+    yes: number;
+    no: number;
+    skip: number;
+  };
+  // Current statement persistence (for deterministic undo)
+  current_statement_id?: string | null;
 };
 
 export type NorthStarFigure = {

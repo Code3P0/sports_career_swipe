@@ -4,7 +4,8 @@ import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import type { RunState, HistoryEntry } from '@/types/schema'
 import { updateElo } from '@/lib/elo'
-import { statements, type Statement } from '@/data/statements'
+import { statements, type Statement, getStatementById, getValidStatementIds } from '@/data/statements'
+import { getNextStatement } from '@/lib/selector'
 import styles from './play.module.css'
 
 // All 8 MVP lanes
@@ -71,8 +72,11 @@ const SKIP_ANIMATION_DURATION = 180
 const BASELINE_RATING = 1000
 
 // Run length: number of statements to show
-// Adjust this value to change game length
-const MAX_ROUNDS = 32
+// Adjust these values to change game length and early finish
+const MIN_SWIPES = 18 // Minimum swipes before early finish allowed
+const MAX_ROUNDS = 32 // Maximum swipes (current max)
+const FINISH_GAP = 75 // ELO points gap required for early finish
+const MAX_SKIP_RATE_FOR_STRONG = 0.35 // Max skip rate for strong confidence
 
 // Card size: max width for square card
 // Adjust this value to change card size
@@ -81,7 +85,6 @@ const CARD_MAX_WIDTH = 420
 export default function PlayPage() {
   const router = useRouter()
   const [runState, setRunState] = useState<RunState | null>(null)
-  const [currentStatementIndex, setCurrentStatementIndex] = useState(0)
   
   // Swipe state
   const [dragState, setDragState] = useState<{
@@ -98,8 +101,13 @@ export default function PlayPage() {
   const cardRef = useRef<HTMLDivElement>(null)
   const undoSnapshotRef = useRef<{ runState: RunState; statementIndex: number } | null>(null)
 
-  // Get current statement
-  const currentStatement: Statement | undefined = statements[currentStatementIndex % statements.length]
+  // Get valid statement IDs for migration
+  const validStatementIds = getValidStatementIds()
+
+  // Get current statement from runState.current_statement_id (deterministic)
+  const currentStatement: Statement | null = runState?.current_statement_id
+    ? getStatementById(runState.current_statement_id) || null
+    : null
 
   useEffect(() => {
     // Initialize or load RunState from localStorage
@@ -125,9 +133,60 @@ export default function PlayPage() {
           parsed.max_rounds = MAX_ROUNDS
         }
         
+        // Migrate: add tracking fields if missing
+        if (!parsed.seen_statement_ids) {
+          parsed.seen_statement_ids = []
+        }
+        if (!parsed.lane_counts_shown) {
+          parsed.lane_counts_shown = {}
+        }
+        if (!parsed.answer_counts) {
+          parsed.answer_counts = { yes: 0, no: 0, skip: 0 }
+        }
+        
+        // Filter out invalid statement IDs (handle stale localStorage)
+        parsed.seen_statement_ids = parsed.seen_statement_ids.filter(id => validStatementIds.has(id))
+        
+        // Rebuild tracking from history (filtering invalid entries)
+        parsed.history = parsed.history.filter(entry => {
+          if (entry.statement_id && !validStatementIds.has(entry.statement_id)) {
+            return false // Remove invalid history entries
+          }
+          return true
+        })
+        
+        parsed.history.forEach(entry => {
+          if (entry.statement_id && validStatementIds.has(entry.statement_id) && !parsed.seen_statement_ids!.includes(entry.statement_id)) {
+            parsed.seen_statement_ids!.push(entry.statement_id)
+          }
+          if (entry.lane_id) {
+            parsed.lane_counts_shown![entry.lane_id] = (parsed.lane_counts_shown![entry.lane_id] || 0) + 1
+          }
+          if (entry.answer) {
+            if (entry.answer === 'yes') parsed.answer_counts!.yes++
+            else if (entry.answer === 'no') parsed.answer_counts!.no++
+            else if (entry.answer === 'skip' || entry.answer === 'meh') parsed.answer_counts!.skip++
+          }
+        })
+        
+        // Validate current_statement_id
+        if (parsed.current_statement_id && !validStatementIds.has(parsed.current_statement_id)) {
+          parsed.current_statement_id = null // Invalid ID, will select new one
+        }
+        
+        // If no current_statement_id, select next statement
+        if (!parsed.current_statement_id) {
+          const next = getNextStatement(statements, parsed)
+          if (next) {
+            parsed.current_statement_id = next.id
+          } else {
+            // No statements available, route to results
+            router.push('/results')
+            return
+          }
+        }
+        
         setRunState(parsed)
-        // Set statement index based on history length
-        setCurrentStatementIndex(parsed.history.length)
       } catch (e) {
         // If parsing fails, initialize new state
         initializeRunState()
@@ -142,12 +201,50 @@ export default function PlayPage() {
       round: 1,
       max_rounds: MAX_ROUNDS,
       lane_ratings: { ...INITIAL_LANE_RATINGS },
-      history: []
+      history: [],
+      seen_statement_ids: [],
+      lane_counts_shown: {},
+      answer_counts: { yes: 0, no: 0, skip: 0 },
+      current_statement_id: null
     }
+    
+    // Select first statement
+    const firstStatement = getNextStatement(statements, newState)
+    if (firstStatement) {
+      newState.current_statement_id = firstStatement.id
+    } else {
+      // No statements available, route to results
+      router.push('/results')
+      return
+    }
+    
     setRunState(newState)
     localStorage.setItem('runState', JSON.stringify(newState))
-    setCurrentStatementIndex(0)
     undoSnapshotRef.current = null // Clear undo on new run
+  }
+  
+  // Check if we can finish early
+  const canFinishEarly = (state: RunState): boolean => {
+    if (state.round < MIN_SWIPES) return false
+    
+    const answerCounts = state.answer_counts || { yes: 0, no: 0, skip: 0 }
+    const totalAnswers = answerCounts.yes + answerCounts.no + answerCounts.skip
+    if (totalAnswers < MIN_SWIPES) return false
+    
+    const skipRate = totalAnswers > 0 ? answerCounts.skip / totalAnswers : 0
+    if (skipRate > MAX_SKIP_RATE_FOR_STRONG) return false
+    
+    const sortedLanes = Object.entries(state.lane_ratings)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 2)
+    
+    if (sortedLanes.length < 2) return false
+    
+    const topRating = sortedLanes[0]?.[1] || 1000
+    const runnerUpRating = sortedLanes[1]?.[1] || 1000
+    const gap = topRating - runnerUpRating
+    
+    return gap >= FINISH_GAP
   }
 
   const commitChoice = (answer: 'yes' | 'no') => {
@@ -156,7 +253,7 @@ export default function PlayPage() {
     // Store snapshot for undo before making changes
     undoSnapshotRef.current = {
       runState: JSON.parse(JSON.stringify(runState)),
-      statementIndex: currentStatementIndex
+      statementIndex: 0 // Not used anymore but kept for compatibility
     }
 
     setIsAnimating(true)
@@ -187,12 +284,50 @@ export default function PlayPage() {
       timestamp_iso: new Date().toISOString()
     }
 
+    // Update tracking fields
+    const seenIds = [...(runState.seen_statement_ids || [])]
+    if (!seenIds.includes(currentStatement.id)) {
+      seenIds.push(currentStatement.id)
+    }
+    
+    const laneCounts = { ...(runState.lane_counts_shown || {}) }
+    laneCounts[laneId] = (laneCounts[laneId] || 0) + 1
+    
+    const answerCounts = { ...(runState.answer_counts || { yes: 0, no: 0, skip: 0 }) }
+    if (answer === 'yes') answerCounts.yes++
+    else if (answer === 'no') answerCounts.no++
+
     const newRound = runState.round + 1
-    const updatedState: RunState = {
+    
+    // Select next statement BEFORE updating state
+    const tempState: RunState = {
       ...runState,
       round: newRound,
       lane_ratings: updatedRatings,
-      history: [...runState.history, historyEntry]
+      history: [...runState.history, historyEntry],
+      seen_statement_ids: seenIds,
+      lane_counts_shown: laneCounts,
+      answer_counts: answerCounts,
+      current_statement_id: null // Clear current to select next
+    }
+    
+    const nextStatement = getNextStatement(statements, tempState)
+    
+    // If no next statement available, route to results
+    if (!nextStatement) {
+      const finalState: RunState = {
+        ...tempState,
+        current_statement_id: null
+      }
+      setRunState(finalState)
+      localStorage.setItem('runState', JSON.stringify(finalState))
+      router.push('/results')
+      return
+    }
+    
+    const updatedState: RunState = {
+      ...tempState,
+      current_statement_id: nextStatement.id
     }
 
     setRunState(updatedState)
@@ -208,13 +343,11 @@ export default function PlayPage() {
         currentX: 0
       })
       
-      // Navigate to results after max rounds
-      if (newRound > MAX_ROUNDS) {
+      // Check for early finish or max rounds
+      if (canFinishEarly(updatedState) || newRound > MAX_ROUNDS) {
         router.push('/results')
-      } else {
-        // Move to next statement
-        setCurrentStatementIndex(prev => prev + 1)
       }
+      // else: current_statement_id already set, card will render
     }, 300)
   }
 
@@ -225,7 +358,7 @@ export default function PlayPage() {
     // Store snapshot for undo before making changes
     undoSnapshotRef.current = {
       runState: JSON.parse(JSON.stringify(runState)),
-      statementIndex: currentStatementIndex
+      statementIndex: 0
     }
 
     setIsAnimating(true)
@@ -241,12 +374,49 @@ export default function PlayPage() {
       timestamp_iso: new Date().toISOString()
     }
 
+    // Update tracking fields
+    const seenIds = [...(runState.seen_statement_ids || [])]
+    if (!seenIds.includes(currentStatement.id)) {
+      seenIds.push(currentStatement.id)
+    }
+    
+    const laneCounts = { ...(runState.lane_counts_shown || {}) }
+    laneCounts[laneId] = (laneCounts[laneId] || 0) + 1
+    
+    const answerCounts = { ...(runState.answer_counts || { yes: 0, no: 0, skip: 0 }) }
+    answerCounts.skip++
+
     const newRound = runState.round + 1
-    const updatedState: RunState = {
+    
+    // Select next statement BEFORE updating state
+    const tempState: RunState = {
       ...runState,
       round: newRound,
       // lane_ratings unchanged
-      history: [...runState.history, historyEntry]
+      history: [...runState.history, historyEntry],
+      seen_statement_ids: seenIds,
+      lane_counts_shown: laneCounts,
+      answer_counts: answerCounts,
+      current_statement_id: null // Clear current to select next
+    }
+    
+    const nextStatement = getNextStatement(statements, tempState)
+    
+    // If no next statement available, route to results
+    if (!nextStatement) {
+      const finalState: RunState = {
+        ...tempState,
+        current_statement_id: null
+      }
+      setRunState(finalState)
+      localStorage.setItem('runState', JSON.stringify(finalState))
+      router.push('/results')
+      return
+    }
+    
+    const updatedState: RunState = {
+      ...tempState,
+      current_statement_id: nextStatement.id
     }
 
     setRunState(updatedState)
@@ -262,13 +432,11 @@ export default function PlayPage() {
         currentX: 0
       })
       
-      // Navigate to results after max rounds
-      if (newRound > MAX_ROUNDS) {
+      // Check for early finish or max rounds
+      if (canFinishEarly(updatedState) || newRound > MAX_ROUNDS) {
         router.push('/results')
-      } else {
-        // Move to next statement
-        setCurrentStatementIndex(prev => prev + 1)
       }
+      // else: current_statement_id already set, card will render
     }, SKIP_ANIMATION_DURATION)
   }
 
@@ -279,7 +447,7 @@ export default function PlayPage() {
     // Store snapshot for undo before making changes
     undoSnapshotRef.current = {
       runState: JSON.parse(JSON.stringify(runState)),
-      statementIndex: currentStatementIndex
+      statementIndex: 0
     }
 
     setIsAnimating(true)
@@ -295,12 +463,49 @@ export default function PlayPage() {
       timestamp_iso: new Date().toISOString()
     }
 
+    // Update tracking fields
+    const seenIds = [...(runState.seen_statement_ids || [])]
+    if (!seenIds.includes(currentStatement.id)) {
+      seenIds.push(currentStatement.id)
+    }
+    
+    const laneCounts = { ...(runState.lane_counts_shown || {}) }
+    laneCounts[laneId] = (laneCounts[laneId] || 0) + 1
+    
+    const answerCounts = { ...(runState.answer_counts || { yes: 0, no: 0, skip: 0 }) }
+    answerCounts.skip++
+
     const newRound = runState.round + 1
-    const updatedState: RunState = {
+    
+    // Select next statement BEFORE updating state
+    const tempState: RunState = {
       ...runState,
       round: newRound,
       // lane_ratings unchanged
-      history: [...runState.history, historyEntry]
+      history: [...runState.history, historyEntry],
+      seen_statement_ids: seenIds,
+      lane_counts_shown: laneCounts,
+      answer_counts: answerCounts,
+      current_statement_id: null // Clear current to select next
+    }
+    
+    const nextStatement = getNextStatement(statements, tempState)
+    
+    // If no next statement available, route to results
+    if (!nextStatement) {
+      const finalState: RunState = {
+        ...tempState,
+        current_statement_id: null
+      }
+      setRunState(finalState)
+      localStorage.setItem('runState', JSON.stringify(finalState))
+      router.push('/results')
+      return
+    }
+    
+    const updatedState: RunState = {
+      ...tempState,
+      current_statement_id: nextStatement.id
     }
 
     setRunState(updatedState)
@@ -316,25 +521,24 @@ export default function PlayPage() {
         currentX: 0
       })
       
-      // Navigate to results after max rounds
-      if (newRound > MAX_ROUNDS) {
+      // Check for early finish or max rounds
+      if (canFinishEarly(updatedState) || newRound > MAX_ROUNDS) {
         router.push('/results')
-      } else {
-        // Move to next statement
-        setCurrentStatementIndex(prev => prev + 1)
       }
+      // else: current_statement_id already set, card will render
     }, SKIP_ANIMATION_DURATION)
   }
 
-  // Undo logic: restore previous state
+  // Undo logic: restore previous state (deterministic - restores exact statement)
   const handleUndo = () => {
     if (!undoSnapshotRef.current || isAnimating) return
 
     const snapshot = undoSnapshotRef.current
+    // Restore the exact state including current_statement_id
     setRunState(snapshot.runState)
-    setCurrentStatementIndex(snapshot.statementIndex)
     localStorage.setItem('runState', JSON.stringify(snapshot.runState))
     undoSnapshotRef.current = null
+    // currentStatement is derived from runState.current_statement_id, so it will update automatically
   }
 
   // Swipe handlers
@@ -386,7 +590,20 @@ export default function PlayPage() {
     }
   }
 
-  if (!runState || !currentStatement) {
+  // Handle loading state: if no current statement, check if we should route to results
+  if (!runState) {
+    return <div>Loading...</div>
+  }
+  
+  // If no current statement and we have history, route to results (end of run)
+  if (!currentStatement) {
+    if (runState.history.length > 0) {
+      // We've answered some questions but no statement available - route to results
+      router.push('/results')
+      return <div>Loading...</div>
+    }
+    // Fresh start but selector returned null - should not happen, but route to results
+    router.push('/results')
     return <div>Loading...</div>
   }
 

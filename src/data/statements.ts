@@ -188,16 +188,23 @@ export const statements: Statement[] = [
 ]
 
 /**
- * Get a random statement (for now, we'll cycle through them)
+ * Get all statements for a specific lane
+ */
+export function getStatementsByLaneId(laneId: string): Statement[] {
+  return statements.filter(s => s.lane_id === laneId)
+}
+
+/**
+ * Get statement by ID
  */
 export function getStatementById(id: string): Statement | undefined {
   return statements.find(s => s.id === id)
 }
 
 /**
- * Get all statements for a specific lane
+ * Get set of all valid statement IDs (for migration/validation)
  */
-export function getStatementsByLaneId(laneId: string): Statement[] {
-  return statements.filter(s => s.lane_id === laneId)
+export function getValidStatementIds(): Set<string> {
+  return new Set(statements.map(s => s.id))
 }
 
