@@ -30,3 +30,168 @@ body {
     font-size: 16px;
   }
 }
+
+/* SKIP exit shimmer and sparkle effects */
+@keyframes skipShimmer {
+  0% {
+    transform: translateX(-60%) translateY(10%) rotate(10deg);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(60%) translateY(-10%) rotate(10deg);
+    opacity: 0;
+  }
+}
+
+@keyframes skipSparkle {
+  0% {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  20% {
+    opacity: 0.22;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.02);
+  }
+}
+
+.skipFxShimmer {
+  animation: skipShimmer var(--fx-ms, 380ms) ease-out both;
+}
+
+.skipFxSparkle {
+  animation: skipSparkle var(--fx-ms, 380ms) ease-out both;
+}
+
+/* Gold celebration finish transition */
+@keyframes goldSweep {
+  0% {
+    transform: translateX(-60%) translateY(10%) rotate(8deg);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(60%) translateY(-10%) rotate(8deg);
+    opacity: 0;
+  }
+}
+
+@keyframes goldBloom {
+  0% {
+    transform: scale(0.98);
+    opacity: 0;
+  }
+  25% {
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.04);
+    opacity: 0;
+  }
+}
+
+@keyframes goldSparkles {
+  0% {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  25% {
+    opacity: 0.2;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.03);
+  }
+}
+
+.goldFinishSweep {
+  animation: goldSweep var(--fx-ms, 720ms) ease-out both;
+  mix-blend-mode: screen;
+}
+
+.goldFinishBloom {
+  animation: goldBloom var(--fx-ms, 720ms) ease-out both;
+}
+
+.goldFinishSparkle {
+  animation: goldSparkles var(--fx-ms, 720ms) ease-out both;
+}
+
+/* Editorial completion celebration (distinct from SKIP FX) */
+@keyframes editorialFadeInOut {
+  0% {
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Thin gold hairline sweeping diagonally across */
+@keyframes editorialHairlineSweep {
+  0% {
+    transform: translateX(-70%) translateY(20%) rotate(-12deg);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(70%) translateY(-20%) rotate(-12deg);
+    opacity: 1;
+  }
+}
+
+/* Very subtle grain, fades out */
+@keyframes editorialGrain {
+  0% {
+    opacity: 0;
+  }
+  15% {
+    opacity: 0.06;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.editorialFinishWrap {
+  animation: editorialFadeInOut var(--fx-ms, 700ms) ease-out both;
+}
+
+.editorialFinishPaper {
+  /* paper-white wash (not gold) */
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.92), rgba(245, 245, 245, 0.92));
+}
+
+.editorialFinishHairline {
+  animation: editorialHairlineSweep var(--fx-ms, 700ms) ease-out both;
+  /* gold line, thin */
+  background: linear-gradient(
+    to right,
+    rgba(212, 175, 55, 0),
+    rgba(212, 175, 55, 0.85),
+    rgba(212, 175, 55, 0)
+  );
+  filter: blur(0.25px);
+  mix-blend-mode: multiply;
+}
+
+.editorialFinishGrain {
+  animation: editorialGrain var(--fx-ms, 700ms) ease-out both;
+  mix-blend-mode: multiply;
+  opacity: 0;
+}

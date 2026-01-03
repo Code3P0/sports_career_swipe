@@ -17,6 +17,7 @@ import {
 import { validateRunState } from '@/lib/invariants'
 import { healRunState } from '@/lib/heal'
 import { track } from '@/lib/metrics'
+import { getSoundEnabled, setSoundEnabled, playSwipeSfx } from '@/lib/sfx'
 import { DevPanel } from '@/components/DevPanel'
 import styles from './play.module.css'
 
@@ -31,6 +32,18 @@ const ALL_LANES = [
   'bizops',
   'product',
 ]
+
+// Lane accent colors for ambient glow (soft, not neon)
+const LANE_GLOW: Record<string, { a: string; b: string }> = {
+  partnerships: { a: 'rgba(59,130,246,0.22)', b: 'rgba(147,197,253,0.10)' },
+  content: { a: 'rgba(168,85,247,0.20)', b: 'rgba(216,180,254,0.10)' },
+  community: { a: 'rgba(34,197,94,0.18)', b: 'rgba(134,239,172,0.10)' },
+  growth: { a: 'rgba(249,115,22,0.18)', b: 'rgba(253,186,116,0.10)' },
+  nil: { a: 'rgba(234,179,8,0.18)', b: 'rgba(253,224,71,0.10)' },
+  talent: { a: 'rgba(236,72,153,0.18)', b: 'rgba(251,207,232,0.10)' },
+  bizops: { a: 'rgba(100,116,139,0.18)', b: 'rgba(203,213,225,0.10)' },
+  product: { a: 'rgba(14,165,233,0.18)', b: 'rgba(186,230,253,0.10)' },
+}
 
 // Initialize all lanes to 1000
 const INITIAL_LANE_RATINGS: Record<string, number> = Object.fromEntries(
@@ -79,6 +92,10 @@ const GLOW_PULSE_BOOST = 6 // Extra pulse boost in last 5-10%
 // Adjust this value to make skip animation faster/slower
 const SKIP_ANIMATION_DURATION = 180
 
+// Exit animation duration in milliseconds
+const EXIT_MS_GESTURE = 280 // Fast for gesture swipes
+const EXIT_MS_BUTTON = 380 // Slower for button clicks (more readable)
+
 // Baseline rating for ELO calculations
 // Adjust this value to change how much YES/NO affects ratings
 const BASELINE_RATING = 1000
@@ -110,20 +127,126 @@ export default function PlayPage() {
   })
   const [isAnimating, setIsAnimating] = useState(false)
   const [exitMode, setExitMode] = useState<'yes' | 'no' | 'skip' | null>(null)
+  const [exitIntent, setExitIntent] = useState<'yes' | 'no' | 'skip' | null>(null)
+  type FxState = { intent: null | 'skip'; ms: number; key: number }
+  const [fx, setFx] = useState<FxState>({ intent: null, ms: 0, key: 0 })
+  const [pressGlow, setPressGlow] = useState<null | 'yes' | 'no' | 'skip'>(null)
+  type SwipeIntent = 'yes' | 'no' | 'skip'
+  const [uiIntent, setUiIntent] = useState<null | SwipeIntent>(null)
+  type FinishFx = { on: boolean; ms: number; key: number; token: string }
+  const [finishFx, setFinishFx] = useState<FinishFx>({ on: false, ms: 0, key: 0, token: '' })
   const [isPeekOpen, setIsPeekOpen] = useState(false)
+  const [dragUI, setDragUI] = useState<{
+    x: number
+    p: number
+    dir: 'left' | 'right' | 'none'
+  }>({ x: 0, p: 0, dir: 'none' })
+  const [reducedMotion, setReducedMotion] = useState(false)
+  const [soundEnabled, setSoundEnabledState] = useState(false)
   const cardRef = useRef<HTMLDivElement>(null)
   const isAdvancingRef = useRef(false) // Guard against double-commit
+  const lockRef = useRef(false) // Guard against double-swipe
   const tapStartRef = useRef<{ x: number; y: number; time: number } | null>(null)
+  const dragXRef = useRef(0)
+  const rafRef = useRef<number | null>(null)
 
   // Get current statement from runState.current_statement_id (deterministic)
   const currentStatement: Statement | null = runState?.current_statement_id
     ? getStatementById(runState.current_statement_id) || null
     : null
 
+  // Derive current lane for ambient glow
+  const laneId = currentStatement?.lane_id ?? null
+
+  // Lane accent map for ambient glow
+  const LANE_GLOW: Record<string, { a: string; b: string }> = {
+    partnerships: { a: 'rgba(59,130,246,0.22)', b: 'rgba(147,197,253,0.10)' },
+    content: { a: 'rgba(168,85,247,0.20)', b: 'rgba(216,180,254,0.10)' },
+    community: { a: 'rgba(34,197,94,0.18)', b: 'rgba(134,239,172,0.10)' },
+    growth: { a: 'rgba(249,115,22,0.18)', b: 'rgba(253,186,116,0.10)' },
+    nil: { a: 'rgba(234,179,8,0.18)', b: 'rgba(253,224,71,0.10)' },
+    talent: { a: 'rgba(236,72,153,0.18)', b: 'rgba(251,207,232,0.10)' },
+    bizops: { a: 'rgba(100,116,139,0.18)', b: 'rgba(203,213,225,0.10)' },
+    product: { a: 'rgba(14,165,233,0.18)', b: 'rgba(186,230,253,0.10)' },
+  }
+
+  const glow = laneId ? LANE_GLOW[laneId] : null
+
   // Reset peek when statement changes
   useEffect(() => {
     setIsPeekOpen(false)
   }, [currentStatement?.id])
+
+  // RAF cleanup
+  useEffect(() => {
+    return () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current)
+        rafRef.current = null
+      }
+    }
+  }, [])
+
+  // Detect reduced motion preference
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
+    setReducedMotion(mq.matches)
+
+    const handleChange = (e: MediaQueryListEvent) => {
+      setReducedMotion(e.matches)
+    }
+
+    mq.addEventListener('change', handleChange)
+    return () => mq.removeEventListener('change', handleChange)
+  }, [])
+
+  // Load sound enabled state on mount
+  useEffect(() => {
+    setSoundEnabledState(getSoundEnabled())
+  }, [])
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if typing in input/textarea/contentEditable or locked
+      const target = e.target as HTMLElement
+      if (
+        lockRef.current ||
+        isAnimating ||
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        (target && target.isContentEditable)
+      ) {
+        return
+      }
+
+      const key = e.key.toLowerCase()
+      const isArrowRight = e.key === 'ArrowRight'
+      const isArrowLeft = e.key === 'ArrowLeft'
+      const isArrowDown = e.key === 'ArrowDown'
+      const isBackspace = e.key === 'Backspace'
+
+      if ((isArrowRight || key === 'y') && !dragState.isDragging && runState) {
+        e.preventDefault()
+        performSwipe('yes', 'button')
+      } else if ((isArrowLeft || key === 'n') && !dragState.isDragging && runState) {
+        e.preventDefault()
+        performSwipe('no', 'button')
+      } else if ((isArrowDown || key === 's') && !dragState.isDragging && runState) {
+        e.preventDefault()
+        performSwipe('skip', 'button')
+      } else if ((isBackspace || key === 'u') && !dragState.isDragging && runState) {
+        e.preventDefault()
+        handleUndo()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isAnimating, dragState.isDragging, runState])
 
   useEffect(() => {
     // Load or initialize RunState using centralized state module
@@ -211,6 +334,24 @@ export default function PlayPage() {
     setRunState(newState)
   }
 
+  /**
+   * Start finish transition and route to results after FX
+   */
+  const startFinishTransition = (ms: number) => {
+    const token = String(Date.now())
+    setFinishFx({ on: true, ms, key: Date.now(), token })
+    // lock inputs immediately
+    lockRef.current = true
+    setIsAnimating(true)
+    window.setTimeout(() => {
+      // stop animation state before routing (clean)
+      setFinishFx({ on: false, ms: 0, key: Date.now(), token: '' })
+      setIsAnimating(false)
+      // route to results with token
+      router.push(`/results?celebrate=${token}`)
+    }, ms)
+  }
+
   // Check if we can finish early
   const canFinishEarly = (state: RunState): boolean => {
     if (state.round < MIN_SWIPES) return false
@@ -235,20 +376,151 @@ export default function PlayPage() {
     return gap >= FINISH_GAP
   }
 
+  /**
+   * Unified swipe-out function: animates card, then commits answer
+   * Used by both gesture swipes and button clicks
+   */
+  const performSwipe = async (
+    intent: 'yes' | 'no' | 'skip',
+    source: 'button' | 'gesture' = 'gesture'
+  ) => {
+    if (lockRef.current || !runState || !currentStatement || isAdvancingRef.current) return
+
+    // Check if we've reached max rounds BEFORE animation
+    if (runState.round >= MAX_ROUNDS) {
+      const baseMs = 700
+      const fxMs = reducedMotion ? 180 : baseMs
+      startFinishTransition(fxMs)
+      return
+    }
+
+    // Reset dragUI before starting exit animation
+    setDragUI({ x: 0, p: 0, dir: 'none' })
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current)
+      rafRef.current = null
+    }
+
+    // Play SFX if enabled and not reduced motion
+    if (soundEnabled && !reducedMotion) {
+      playSwipeSfx(intent)
+    }
+
+    // Use different durations based on source and reduced motion
+    const baseExitMs = source === 'button' ? EXIT_MS_BUTTON : EXIT_MS_GESTURE
+    const exitMs = reducedMotion ? Math.round(baseExitMs * 0.57) : baseExitMs // ~160ms/220ms if reduced
+
+    // Set FX state BEFORE applying transforms (for SKIP shimmer visibility)
+    if (intent === 'skip') {
+      setFx({ intent: 'skip', ms: exitMs, key: Date.now() })
+    } else {
+      setFx({ intent: null, ms: 0, key: Date.now() })
+    }
+
+    // IMPORTANT: Set state first so React re-renders tint/badges
+    lockRef.current = true
+    setUiIntent(intent)
+    setIsAnimating(true)
+    setExitMode(intent)
+    setExitIntent(intent)
+
+    // Let React paint the tint/badges before the element moves
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)))
+
+    // Calculate offscreen position (pixel-based, not viewport-based)
+    const offX = typeof window !== 'undefined' ? window.innerWidth * 1.2 : 800
+
+    // Apply exit transform after paint frame
+    const element = cardRef.current
+    if (!element) {
+      // Guard: if element not found, commit immediately and unlock
+      if (intent === 'skip') {
+        commitSkip()
+      } else {
+        commitChoice(intent)
+      }
+      lockRef.current = false
+      return
+    }
+
+    // Clear any lingering transitions before starting new animation
+    element.style.transition = 'none'
+    // Force a reflow to ensure transition reset takes effect
+    void element.offsetHeight
+
+    const rotation = reducedMotion ? 0 : 10 // No rotation if reduced motion
+    if (intent === 'yes') {
+      element.style.transform = `translateX(${offX}px) rotate(${rotation}deg)`
+    } else if (intent === 'no') {
+      element.style.transform = `translateX(${-offX}px) rotate(${-rotation}deg)`
+    } else if (intent === 'skip') {
+      element.style.transform = `translate(0px, 220px) rotate(0deg) scale(0.96)`
+      element.style.opacity = '0'
+      element.style.filter = 'blur(6px) saturate(1.15)'
+      element.style.boxShadow = '0 0 30px rgba(250,204,21,0.22), 0 0 80px rgba(250,204,21,0.12)'
+    }
+    // Update transition duration for this animation
+    if (intent === 'skip') {
+      element.style.transition = `transform ${exitMs}ms ease, opacity ${exitMs}ms ease, filter ${exitMs}ms ease, box-shadow ${exitMs}ms ease`
+    } else {
+      element.style.transition = `transform ${exitMs}ms ease, opacity ${exitMs}ms ease`
+    }
+
+    // Wait for animation to complete
+    await new Promise((resolve) => setTimeout(resolve, exitMs))
+
+    // Commit answer AFTER animation (existing logic)
+    if (intent === 'skip') {
+      commitSkip()
+    } else {
+      commitChoice(intent)
+    }
+
+    // Reset visuals for next card after commit (use requestAnimationFrame to ensure DOM update)
+    // Use the same element reference we animated, not cardRef.current (which may have changed)
+    requestAnimationFrame(() => {
+      if (element) {
+        // Clear transition and reset transform/opacity/filter/boxShadow
+        element.style.transition = 'none'
+        element.style.transform = 'translate(0px, 0px) rotate(0deg) scale(1)'
+        element.style.opacity = '1'
+        element.style.filter = 'none'
+        element.style.boxShadow = 'none'
+      }
+      // Reset dragUI after commit/reset so next card never inherits tint/badge
+      setDragUI({ x: 0, p: 0, dir: 'none' })
+      // Clear FX state after reset completes
+      setFx({ intent: null, ms: 0, key: Date.now() })
+      // Clear UI intent and press glow
+      setUiIntent(null)
+      setPressGlow(null)
+    })
+
+    // Reset animation state
+    setIsAnimating(false)
+    setExitMode(null)
+    setExitIntent(null)
+    setUiIntent(null)
+
+    // Unlock on next tick
+    setTimeout(() => {
+      lockRef.current = false
+    }, 0)
+  }
+
   const commitChoice = (answer: 'yes' | 'no') => {
-    if (!runState || isAnimating || !currentStatement || isAdvancingRef.current) return
+    if (!runState || !currentStatement || isAdvancingRef.current) return
 
     // Check if we've reached max rounds BEFORE updating state
     if (runState.round >= MAX_ROUNDS) {
-      router.push('/results')
+      const baseMs = 700
+      const fxMs = reducedMotion ? 180 : baseMs
+      startFinishTransition(fxMs)
       return
     }
 
     // Set guard to prevent double-commit
     isAdvancingRef.current = true
-
-    setIsAnimating(true)
-    setExitMode(answer)
 
     const laneId = currentStatement.lane_id
     const currentRating = runState.lane_ratings[laneId] || BASELINE_RATING
@@ -298,7 +570,7 @@ export default function PlayPage() {
 
     // Check if this will exceed max rounds BEFORE updating state
     if (newRound > MAX_ROUNDS) {
-      // Final answer - commit to history but route immediately
+      // Final answer - commit to history but route with finish transition
       const finalState: RunState = {
         ...runState,
         round: newRound,
@@ -312,8 +584,10 @@ export default function PlayPage() {
       }
       setRunState(finalState)
       saveRunState(finalState)
-      router.push('/results')
       isAdvancingRef.current = false
+      const baseMs = 700
+      const fxMs = reducedMotion ? 180 : baseMs
+      startFinishTransition(fxMs)
       return
     }
 
@@ -340,8 +614,10 @@ export default function PlayPage() {
       }
       setRunState(finalState)
       saveRunState(finalState)
-      router.push('/results')
       isAdvancingRef.current = false
+      const baseMs = 700
+      const fxMs = reducedMotion ? 180 : baseMs
+      startFinishTransition(fxMs)
       return
     }
 
@@ -357,23 +633,19 @@ export default function PlayPage() {
     setRunState(updatedState)
     saveRunState(updatedState)
 
-    // Animate card off-screen, then move to next statement
-    setTimeout(() => {
-      setIsAnimating(false)
-      setExitMode(null)
-      setDragState({
-        isDragging: false,
-        startX: 0,
-        currentX: 0,
-      })
-      isAdvancingRef.current = false // Clear guard after animation
+    // Reset drag state and clear guard
+    setDragState({
+      isDragging: false,
+      startX: 0,
+      currentX: 0,
+    })
+    isAdvancingRef.current = false // Clear guard after state update
 
-      // Check for early finish (max rounds already checked above)
-      if (canFinishEarly(updatedState)) {
-        router.push('/results')
-      }
-      // else: current_statement_id already set, card will render
-    }, 300)
+    // Check for early finish (max rounds already checked above)
+    if (canFinishEarly(updatedState)) {
+      router.push('/results')
+    }
+    // else: current_statement_id already set, card will render
   }
 
   // Meh logic: advances game without changing lane_ratings
@@ -382,15 +654,14 @@ export default function PlayPage() {
 
     // Check if we've reached max rounds BEFORE updating state
     if (runState.round >= MAX_ROUNDS) {
-      router.push('/results')
+      const baseMs = 700
+      const fxMs = reducedMotion ? 180 : baseMs
+      startFinishTransition(fxMs)
       return
     }
 
     // Set guard to prevent double-commit
     isAdvancingRef.current = true
-
-    setIsAnimating(true)
-    setExitMode('skip') // Use skip animation for meh too
 
     const laneId = currentStatement.lane_id
 
@@ -424,7 +695,7 @@ export default function PlayPage() {
 
     // Check if this will exceed max rounds BEFORE updating state
     if (newRound > MAX_ROUNDS) {
-      // Final answer - commit to history but route immediately
+      // Final answer - commit to history but route with finish transition
       const finalState: RunState = {
         ...runState,
         round: newRound,
@@ -438,8 +709,10 @@ export default function PlayPage() {
       }
       setRunState(finalState)
       saveRunState(finalState)
-      router.push('/results')
       isAdvancingRef.current = false
+      const baseMs = 700
+      const fxMs = reducedMotion ? 180 : baseMs
+      startFinishTransition(fxMs)
       return
     }
 
@@ -466,8 +739,10 @@ export default function PlayPage() {
       }
       setRunState(finalState)
       saveRunState(finalState)
-      router.push('/results')
       isAdvancingRef.current = false
+      const baseMs = 700
+      const fxMs = reducedMotion ? 180 : baseMs
+      startFinishTransition(fxMs)
       return
     }
 
@@ -483,40 +758,35 @@ export default function PlayPage() {
     setRunState(updatedState)
     saveRunState(updatedState)
 
-    // Animate card with skip dissolve, then move to next statement
-    setTimeout(() => {
-      setIsAnimating(false)
-      setExitMode(null)
-      setDragState({
-        isDragging: false,
-        startX: 0,
-        currentX: 0,
-      })
-      isAdvancingRef.current = false // Clear guard after animation
+    // Reset drag state and clear guard
+    setDragState({
+      isDragging: false,
+      startX: 0,
+      currentX: 0,
+    })
+    isAdvancingRef.current = false // Clear guard after state update
 
-      // Check for early finish (max rounds already checked above)
-      if (canFinishEarly(updatedState)) {
-        router.push('/results')
-      }
-      // else: current_statement_id already set, card will render
-    }, SKIP_ANIMATION_DURATION)
+    // Check for early finish (max rounds already checked above)
+    if (canFinishEarly(updatedState)) {
+      router.push('/results')
+    }
+    // else: current_statement_id already set, card will render
   }
 
   // Skip logic: advances game without changing lane_ratings
   const commitSkip = () => {
-    if (!runState || isAnimating || !currentStatement || isAdvancingRef.current) return
+    if (!runState || !currentStatement || isAdvancingRef.current) return
 
     // Check if we've reached max rounds BEFORE updating state
     if (runState.round >= MAX_ROUNDS) {
-      router.push('/results')
+      const baseMs = 700
+      const fxMs = reducedMotion ? 180 : baseMs
+      startFinishTransition(fxMs)
       return
     }
 
     // Set guard to prevent double-commit
     isAdvancingRef.current = true
-
-    setIsAnimating(true)
-    setExitMode('skip')
 
     const laneId = currentStatement.lane_id
 
@@ -550,7 +820,7 @@ export default function PlayPage() {
 
     // Check if this will exceed max rounds BEFORE updating state
     if (newRound > MAX_ROUNDS) {
-      // Final answer - commit to history but route immediately
+      // Final answer - commit to history but route with finish transition
       const finalState: RunState = {
         ...runState,
         round: newRound,
@@ -564,8 +834,10 @@ export default function PlayPage() {
       }
       setRunState(finalState)
       saveRunState(finalState)
-      router.push('/results')
       isAdvancingRef.current = false
+      const baseMs = 700
+      const fxMs = reducedMotion ? 180 : baseMs
+      startFinishTransition(fxMs)
       return
     }
 
@@ -592,8 +864,10 @@ export default function PlayPage() {
       }
       setRunState(finalState)
       saveRunState(finalState)
-      router.push('/results')
       isAdvancingRef.current = false
+      const baseMs = 700
+      const fxMs = reducedMotion ? 180 : baseMs
+      startFinishTransition(fxMs)
       return
     }
 
@@ -609,23 +883,19 @@ export default function PlayPage() {
     setRunState(updatedState)
     saveRunState(updatedState)
 
-    // Animate card with skip dissolve, then move to next statement
-    setTimeout(() => {
-      setIsAnimating(false)
-      setExitMode(null)
-      setDragState({
-        isDragging: false,
-        startX: 0,
-        currentX: 0,
-      })
-      isAdvancingRef.current = false // Clear guard after animation
+    // Reset drag state and clear guard
+    setDragState({
+      isDragging: false,
+      startX: 0,
+      currentX: 0,
+    })
+    isAdvancingRef.current = false // Clear guard after state update
 
-      // Check for early finish (max rounds already checked above)
-      if (canFinishEarly(updatedState)) {
-        router.push('/results')
-      }
-      // else: current_statement_id already set, card will render
-    }, SKIP_ANIMATION_DURATION)
+    // Check for early finish (max rounds already checked above)
+    if (canFinishEarly(updatedState)) {
+      router.push('/results')
+    }
+    // else: current_statement_id already set, card will render
   }
 
   // Undo logic: restore previous state using deterministic stack replay
@@ -681,6 +951,8 @@ export default function PlayPage() {
     }
     const element = cardRef.current
     if (element) {
+      // Disable transitions during drag for direct feel
+      element.style.transition = 'none'
       element.setPointerCapture(e.pointerId)
     }
   }
@@ -692,6 +964,21 @@ export default function PlayPage() {
       ...prev,
       currentX: clientX,
     }))
+
+    // Update dragXRef for drag UI
+    const deltaX = clientX - dragState.startX
+    dragXRef.current = deltaX
+
+    // Throttle drag UI updates with RAF
+    if (rafRef.current === null) {
+      rafRef.current = requestAnimationFrame(() => {
+        const x = dragXRef.current
+        const p = Math.min(Math.max(Math.abs(x) / SWIPE_THRESHOLD, 0), 1)
+        const dir: 'left' | 'right' | 'none' = x > 0 ? 'right' : x < 0 ? 'left' : 'none'
+        setDragUI({ x, p, dir })
+        rafRef.current = null
+      })
+    }
   }
 
   const handlePointerUp = (e: React.PointerEvent) => {
@@ -701,15 +988,31 @@ export default function PlayPage() {
     const element = cardRef.current
 
     if (element) {
-      element.releasePointerCapture(e.pointerId)
+      try {
+        element.releasePointerCapture(e.pointerId)
+      } catch {
+        // Ignore errors if pointer capture was already released
+      }
     }
 
     // Check if swipe threshold is met
     if (Math.abs(deltaX) >= SWIPE_THRESHOLD) {
       // Swipe right = YES, swipe left = NO
-      const answer = deltaX > 0 ? 'yes' : 'no'
-      commitChoice(answer)
+      const intent: 'yes' | 'no' = deltaX > 0 ? 'yes' : 'no'
       tapStartRef.current = null // Clear tap tracking on swipe
+      // Reset drag state before animation
+      setDragState({
+        isDragging: false,
+        startX: 0,
+        currentX: 0,
+      })
+      setDragUI({ x: 0, p: 0, dir: 'none' })
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current)
+        rafRef.current = null
+      }
+      performSwipe(intent, 'gesture')
+      return
     } else {
       // Check if this was a tap (not a swipe)
       const tapStart = tapStartRef.current
@@ -738,6 +1041,11 @@ export default function PlayPage() {
         startX: 0,
         currentX: 0,
       })
+      setDragUI({ x: 0, p: 0, dir: 'none' })
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current)
+        rafRef.current = null
+      }
     }
   }
 
@@ -829,6 +1137,25 @@ export default function PlayPage() {
         position: 'relative',
       }}
     >
+      {/* Ambient lane glow (behind card stack) */}
+      {glow && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            width: '600px',
+            height: '600px',
+            pointerEvents: 'none',
+            zIndex: 0,
+            opacity: 0.9,
+            filter: 'blur(75px)',
+            background: `radial-gradient(circle at 50% 40%, ${glow.a}, transparent 60%), radial-gradient(circle at 20% 80%, ${glow.b}, transparent 55%)`,
+            transition: reducedMotion ? 'none' : 'opacity 300ms ease, background 300ms ease',
+          }}
+        />
+      )}
       <div
         style={{
           textAlign: 'center',
@@ -887,7 +1214,7 @@ export default function PlayPage() {
               fontWeight: '600',
             }}
           >
-            Round {runState.round}/{runState.max_rounds}
+            Swipe {runState.round} / {runState.max_rounds}
           </div>
           {/* Spacer for symmetry */}
           <div style={{ width: '60px' }} />
@@ -896,241 +1223,553 @@ export default function PlayPage() {
         <div
           style={{
             width: '100%',
-            height: '6px',
-            backgroundColor: '#e0e0e0',
-            borderRadius: '3px',
+            height: '8px',
+            backgroundColor: '#e5e7eb',
+            borderRadius: '9999px',
             overflow: 'hidden',
+            marginTop: '8px',
           }}
         >
           <div
             style={{
               width: `${(runState.round / runState.max_rounds) * 100}%`,
               height: '100%',
-              backgroundColor: '#0070f3',
-              transition: 'width 0.3s ease',
-              borderRadius: '3px',
+              backgroundColor: '#111827',
+              borderRadius: '9999px',
+              transition: 'width 200ms ease',
             }}
           />
         </div>
+        {/* Keyboard shortcuts hint + Sound toggle (desktop only) */}
+        <div
+          className="hidden md:flex"
+          style={{
+            fontSize: '0.75rem',
+            color: '#9ca3af',
+            textAlign: 'center',
+            marginTop: '8px',
+            justifyContent: 'center',
+            alignItems: 'center',
+            gap: '12px',
+          }}
+        >
+          <span>Keys: Y / N / S • Undo: U</span>
+          <button
+            onClick={() => {
+              const newState = !soundEnabled
+              setSoundEnabled(newState)
+              setSoundEnabledState(newState)
+              track('sfx_toggled', { on: newState })
+            }}
+            style={{
+              fontSize: '0.75rem',
+              color: '#9ca3af',
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              textDecoration: 'underline',
+              padding: '2px 4px',
+            }}
+            onMouseOver={(e) => {
+              e.currentTarget.style.color = '#6b7280'
+            }}
+            onMouseOut={(e) => {
+              e.currentTarget.style.color = '#9ca3af'
+            }}
+          >
+            Sound: {soundEnabled ? 'On' : 'Off'}
+          </button>
+        </div>
       </div>
 
-      {/* Statement Card */}
+      {/* Card Stack Container */}
       <div
-        ref={cardRef}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-        className={styles.swipeCard}
         style={{
-          padding: '32px',
-          backgroundColor: 'white',
-          borderRadius: '16px',
-          boxShadow:
-            dragState.isDragging && end > 0
-              ? `0 4px 12px rgba(0,0,0,0.15), 0 0 0 ${strokePx}px ${strokeColor}, 0 0 ${glowPx}px ${glowColor}`
-              : '0 4px 12px rgba(0,0,0,0.15)',
-          overflow: 'hidden',
-          cursor: isAnimating ? 'default' : 'grab',
-          touchAction: 'none',
-          aspectRatio: '1 / 1',
-          maxWidth: `${CARD_MAX_WIDTH}px`,
-          width: '92vw',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'center',
-          alignItems: 'center',
           position: 'relative',
-          transform: dragState.isDragging
-            ? `translateX(${deltaX}px) rotate(${deltaX * 0.1}deg)`
-            : isAnimating && exitMode !== 'skip'
-              ? `translateX(${deltaX > 0 ? '100vw' : '-100vw'}) rotate(${deltaX > 0 ? '30deg' : '-30deg'})`
-              : isAnimating && exitMode === 'skip'
-                ? `scale(0.95)`
-                : 'translateX(0) rotate(0deg)',
-          transition: dragState.isDragging
-            ? 'none'
-            : exitMode === 'skip'
-              ? `transform ${SKIP_ANIMATION_DURATION}ms ease, opacity ${SKIP_ANIMATION_DURATION}ms ease, filter ${SKIP_ANIMATION_DURATION}ms ease`
-              : 'transform 0.25s ease, opacity 0.25s ease, box-shadow 0.25s ease',
-          opacity: isAnimating ? 0 : 1,
-          filter: isAnimating && exitMode === 'skip' ? 'blur(4px)' : 'none',
+          width: '92vw',
+          maxWidth: `${CARD_MAX_WIDTH}px`,
+          aspectRatio: '1 / 1',
           alignSelf: 'center',
         }}
       >
-        {/* Directional edge-to-edge fill overlay */}
-        {dragState.isDragging && progress > 0 && (
+        {/* Ambient lane glow (behind card stack) */}
+        {glow && (
           <div
             style={{
               position: 'absolute',
-              inset: 0,
-              borderRadius: 'inherit',
+              inset: '-40px',
+              borderRadius: '16px',
               pointerEvents: 'none',
-              zIndex: 1,
-              opacity: fillOpacity,
-              background: fillGradient,
-              clipPath: clipPath,
-              transition: dragState.isDragging ? 'none' : 'opacity 0.2s ease, clip-path 0.2s ease',
+              zIndex: 0,
+              background: `radial-gradient(circle at 50% 40%, ${glow.a}, transparent 60%), radial-gradient(circle at 20% 80%, ${glow.b}, transparent 55%)`,
+              opacity: 0.9,
+              filter: 'blur(70px)',
+              transition: reducedMotion ? 'none' : 'opacity 300ms ease, background 300ms ease',
             }}
           />
         )}
-
-        {/* Skip golden remnant overlay */}
-        {isAnimating && exitMode === 'skip' && (
+        {/* SKIP shimmer + sparkle overlay (outside fading card, on stack container) */}
+        {fx.intent === 'skip' && isAnimating && (
           <div
+            key={fx.key}
+            className="skipFxWrap"
             style={{
               position: 'absolute',
               inset: 0,
-              borderRadius: 'inherit',
+              borderRadius: '16px',
               pointerEvents: 'none',
-              zIndex: 4,
-              background: SKIP_COLOR,
-              transition: 'opacity 0.2s ease',
-            }}
-          />
-        )}
-
-        <p
-          style={{
-            fontSize: '1.4rem',
-            fontWeight: '500',
-            lineHeight: '1.6',
-            textAlign: 'center',
-            color: '#333',
-            position: 'relative',
-            zIndex: 3,
-          }}
-        >
-          {currentStatement.text}
-        </p>
-
-        {/* Peek details section */}
-        {isPeekOpen && (currentStatement.roles || currentStatement.example) && (
-          <div
-            style={{
-              marginTop: '20px',
-              paddingTop: '20px',
-              borderTop: '1px solid #e0e0e0',
-              position: 'relative',
-              zIndex: 3,
-              width: '100%',
+              zIndex: 50,
+              overflow: 'hidden',
+              ['--fx-ms' as any]: `${fx.ms}ms`,
             }}
           >
-            {currentStatement.roles && currentStatement.roles.length > 0 && (
-              <div style={{ marginBottom: '12px' }}>
-                <div
-                  style={{
-                    fontSize: '0.85rem',
-                    fontWeight: '600',
-                    color: '#666',
-                    marginBottom: '6px',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.5px',
-                  }}
-                >
-                  Roles:
-                </div>
-                <ul
-                  style={{
-                    listStyle: 'none',
-                    padding: 0,
-                    margin: 0,
-                    fontSize: '0.95rem',
-                    color: '#333',
-                  }}
-                >
-                  {currentStatement.roles.map((role, idx) => (
-                    <li
-                      key={idx}
-                      style={{
-                        marginBottom: '4px',
-                        paddingLeft: '16px',
-                        position: 'relative',
-                      }}
-                    >
-                      <span
-                        style={{
-                          position: 'absolute',
-                          left: 0,
-                          color: '#999',
-                        }}
-                      >
-                        •
-                      </span>
-                      {role}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+            {/* Gold radial glow */}
+            <div
+              className="skipFxGlow"
+              style={{
+                position: 'absolute',
+                inset: 0,
+                background:
+                  'radial-gradient(circle at 50% 40%, rgba(250,204,21,0.22), transparent 62%)',
+                opacity: 1,
+                transition: reducedMotion ? 'opacity 120ms ease' : 'none',
+              }}
+            />
+            {/* Shimmer sweep (only if not reduced motion) */}
+            {!reducedMotion && (
+              <div
+                className="skipFxShimmer"
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  background: `linear-gradient(115deg,
+                    transparent 0%,
+                    rgba(250,204,21,0.00) 35%,
+                    rgba(250,204,21,0.35) 50%,
+                    rgba(250,204,21,0.00) 65%,
+                    transparent 100%)`,
+                  filter: 'blur(1px)',
+                  mixBlendMode: 'screen',
+                }}
+              />
             )}
-            {currentStatement.example && (
-              <div>
-                <div
-                  style={{
-                    fontSize: '0.85rem',
-                    fontWeight: '600',
-                    color: '#666',
-                    marginBottom: '6px',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.5px',
-                  }}
-                >
-                  Example:
-                </div>
-                <p
-                  style={{
-                    fontSize: '0.95rem',
-                    color: '#333',
-                    lineHeight: '1.5',
-                    margin: 0,
-                  }}
-                >
-                  {currentStatement.example}
-                </p>
-              </div>
+            {/* Subtle sparkle noise (only if not reduced motion) */}
+            {!reducedMotion && (
+              <div
+                className="skipFxSparkle"
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  backgroundImage: 'radial-gradient(rgba(250,204,21,0.35) 1px, transparent 1px)',
+                  backgroundSize: '18px 18px',
+                  opacity: 0.18,
+                }}
+              />
             )}
           </div>
         )}
 
-        {/* Clickable Details affordance */}
-        {currentStatement && (currentStatement.roles || currentStatement.example) && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              setIsPeekOpen((prev) => !prev)
-            }}
+        {/* Back Card (visual stack, no interaction) */}
+        <div
+          aria-hidden="true"
+          role="presentation"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            backgroundColor: 'white',
+            borderRadius: '16px',
+            border: '1px solid rgba(0,0,0,0.06)',
+            background: 'linear-gradient(180deg, #ffffff, #f9fafb)',
+            boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
+            pointerEvents: 'none',
+            zIndex: 1,
+            // Animate scale and translateY based on drag progress
+            // translateY: 10px → 6px, scale: 0.985 → 0.995 as dragUI.p increases
+            transform: `translateY(${10 - dragUI.p * 4}px) scale(${0.985 + dragUI.p * 0.01})`,
+            transition: dragState.isDragging ? 'none' : 'transform 0.2s ease-out',
+          }}
+        />
+
+        {/* Statement Card (active, interactive) */}
+        <div
+          ref={cardRef}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={(e) => {
+            // Reset dragUI on cancel
+            setDragUI({ x: 0, p: 0, dir: 'none' })
+            if (rafRef.current !== null) {
+              cancelAnimationFrame(rafRef.current)
+              rafRef.current = null
+            }
+            handlePointerUp(e)
+          }}
+          className={styles.swipeCard}
+          style={{
+            padding: '32px',
+            backgroundColor: 'white',
+            borderRadius: '16px',
+            overflow: 'hidden',
+            cursor: isAnimating ? 'default' : 'grab',
+            touchAction: 'none',
+            aspectRatio: '1 / 1',
+            maxWidth: `${CARD_MAX_WIDTH}px`,
+            width: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+            alignItems: 'center',
+            position: 'relative',
+            zIndex: 2,
+            // Premium depth shadow + lift (only when not exiting)
+            ...(isAnimating
+              ? {
+                  boxShadow:
+                    dragState.isDragging && end > 0
+                      ? `0 4px 12px rgba(0,0,0,0.15), 0 0 0 ${strokePx}px ${strokeColor}, 0 0 ${glowPx}px ${glowColor}`
+                      : '0 4px 12px rgba(0,0,0,0.15)',
+                  transform: dragState.isDragging
+                    ? `translateX(${deltaX}px) rotate(${deltaX * 0.1}deg)`
+                    : undefined,
+                }
+              : {
+                  // Shadow and lift based on drag progress
+                  boxShadow: (() => {
+                    const p = dragUI.p
+                    const baseShadow = `0 ${8 + p * 8}px ${24 + p * 24}px rgba(0,0,0,${0.1 + p * 0.06})`
+                    if (dragState.isDragging && end > 0) {
+                      return `${baseShadow}, 0 0 0 ${strokePx}px ${strokeColor}, 0 0 ${glowPx}px ${glowColor}`
+                    }
+                    return baseShadow
+                  })(),
+                  transform: dragState.isDragging
+                    ? `translateX(${deltaX}px) translateY(${-(dragUI.p * 2)}px) rotate(${deltaX * 0.1}deg)`
+                    : undefined,
+                }),
+            transition: dragState.isDragging
+              ? 'none' // No transition during drag for direct feel
+              : isAnimating
+                ? undefined // performSwipe sets transition duration via inline style
+                : 'transform 0.2s ease-out, box-shadow 0.2s ease-out',
+            opacity: isAnimating && exitMode === 'skip' ? 0 : 1,
+            filter: isAnimating && exitMode === 'skip' ? 'blur(4px)' : 'none',
+          }}
+        >
+          {/* Directional edge-to-edge fill overlay */}
+          {dragState.isDragging && progress > 0 && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                borderRadius: 'inherit',
+                pointerEvents: 'none',
+                zIndex: 1,
+                opacity: fillOpacity,
+                background: fillGradient,
+                clipPath: clipPath,
+                transition: dragState.isDragging
+                  ? 'none'
+                  : 'opacity 0.2s ease, clip-path 0.2s ease',
+              }}
+            />
+          )}
+
+          {/* Unified intent UI (drag OR tap OR exiting) */}
+          {(() => {
+            // Derive unified intent and strength
+            const derivedIntent: null | SwipeIntent = isAnimating
+              ? (exitMode as SwipeIntent)
+              : dragState.isDragging
+                ? dragUI.dir === 'right'
+                  ? 'yes'
+                  : dragUI.dir === 'left'
+                    ? 'no'
+                    : null
+                : uiIntent
+
+            const strength = isAnimating ? 1 : dragState.isDragging ? dragUI.p : uiIntent ? 1 : 0
+
+            // Only show if there's an intent (not during SKIP exit, handled by gold FX)
+            if (!derivedIntent || derivedIntent === 'skip') return null
+
+            // Make opacity noticeable
+            const tintOpacity = Math.min(0.18, strength * 0.18)
+
+            return (
+              <>
+                {/* YES badge */}
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '16px',
+                    right: '16px',
+                    padding: '6px 12px',
+                    fontSize: '0.75rem',
+                    fontWeight: '700',
+                    letterSpacing: '0.05em',
+                    textTransform: 'uppercase',
+                    color: 'white',
+                    backgroundColor: 'rgba(34, 197, 94, 0.9)',
+                    borderRadius: '9999px',
+                    pointerEvents: 'none',
+                    zIndex: 5,
+                    opacity: derivedIntent === 'yes' ? strength : 0,
+                    transform: `scale(${0.96 + 0.04 * strength})`,
+                    transition: 'opacity 0.1s ease, transform 0.1s ease',
+                  }}
+                >
+                  YES
+                </div>
+                {/* NO badge */}
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '16px',
+                    left: '16px',
+                    padding: '6px 12px',
+                    fontSize: '0.75rem',
+                    fontWeight: '700',
+                    letterSpacing: '0.05em',
+                    textTransform: 'uppercase',
+                    color: 'white',
+                    backgroundColor: 'rgba(239, 68, 68, 0.9)',
+                    borderRadius: '9999px',
+                    pointerEvents: 'none',
+                    zIndex: 5,
+                    opacity: derivedIntent === 'no' ? strength : 0,
+                    transform: `scale(${0.96 + 0.04 * strength})`,
+                    transition: 'opacity 0.1s ease, transform 0.1s ease',
+                  }}
+                >
+                  NO
+                </div>
+                {/* Intent tint overlay */}
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    borderRadius: 'inherit',
+                    pointerEvents: 'none',
+                    zIndex: 3,
+                    backgroundColor:
+                      derivedIntent === 'yes'
+                        ? 'rgba(34, 197, 94, 0.1)'
+                        : derivedIntent === 'no'
+                          ? 'rgba(239, 68, 68, 0.1)'
+                          : 'transparent',
+                    opacity: tintOpacity,
+                    transition: 'opacity 0.1s ease, background-color 0.1s ease',
+                  }}
+                />
+              </>
+            )
+          })()}
+
+          {/* Intent color overlay during exit */}
+          {isAnimating && exitIntent && (
+            <>
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  borderRadius: 'inherit',
+                  pointerEvents: 'none',
+                  zIndex: 4,
+                  backgroundColor:
+                    exitIntent === 'yes'
+                      ? 'rgba(76, 175, 80, 0.1)'
+                      : exitIntent === 'no'
+                        ? 'rgba(244, 67, 54, 0.1)'
+                        : 'rgba(158, 158, 158, 0.1)',
+                  transition: `opacity ${EXIT_MS_BUTTON}ms ease`,
+                  opacity: 1,
+                }}
+              />
+              {/* SKIP gold radial overlay */}
+              {exitIntent === 'skip' && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    borderRadius: 'inherit',
+                    pointerEvents: 'none',
+                    zIndex: 4,
+                    background:
+                      'radial-gradient(circle at 50% 40%, rgba(250,204,21,0.18), transparent 60%)',
+                    transition: `opacity ${EXIT_MS_BUTTON}ms ease`,
+                    opacity: 1,
+                  }}
+                />
+              )}
+            </>
+          )}
+
+          {/* Intent color overlay during exit */}
+          {isAnimating && exitIntent && (
+            <>
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  borderRadius: 'inherit',
+                  pointerEvents: 'none',
+                  zIndex: 4,
+                  backgroundColor:
+                    exitIntent === 'yes'
+                      ? 'rgba(76, 175, 80, 0.1)'
+                      : exitIntent === 'no'
+                        ? 'rgba(244, 67, 54, 0.1)'
+                        : 'rgba(158, 158, 158, 0.1)',
+                  transition: `opacity ${EXIT_MS_BUTTON}ms ease`,
+                  opacity: 1,
+                }}
+              />
+            </>
+          )}
+
+          <p
             style={{
-              marginTop: '16px',
-              padding: '8px 12px',
-              fontSize: '0.85rem',
-              color: '#666',
-              backgroundColor: 'transparent',
-              border: '1px solid #e0e0e0',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '6px',
+              fontSize: '1.4rem',
+              fontWeight: '500',
+              lineHeight: '1.6',
+              textAlign: 'center',
+              color: '#333',
               position: 'relative',
               zIndex: 3,
-              transition: 'all 0.2s',
-              width: 'auto',
-              alignSelf: 'center',
-            }}
-            onMouseOver={(e) => {
-              e.currentTarget.style.backgroundColor = '#f5f5f5'
-              e.currentTarget.style.borderColor = '#999'
-            }}
-            onMouseOut={(e) => {
-              e.currentTarget.style.backgroundColor = 'transparent'
-              e.currentTarget.style.borderColor = '#e0e0e0'
             }}
           >
-            <span style={{ fontSize: '1rem' }}>ⓘ</span>
-            <span>{isPeekOpen ? 'Hide details' : 'Details'}</span>
-          </button>
-        )}
+            {currentStatement.text}
+          </p>
+
+          {/* Peek details section */}
+          {isPeekOpen && (currentStatement.roles || currentStatement.example) && (
+            <div
+              style={{
+                marginTop: '20px',
+                paddingTop: '20px',
+                borderTop: '1px solid #e0e0e0',
+                position: 'relative',
+                zIndex: 3,
+                width: '100%',
+              }}
+            >
+              {currentStatement.roles && currentStatement.roles.length > 0 && (
+                <div style={{ marginBottom: '12px' }}>
+                  <div
+                    style={{
+                      fontSize: '0.85rem',
+                      fontWeight: '600',
+                      color: '#666',
+                      marginBottom: '6px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                    }}
+                  >
+                    Roles:
+                  </div>
+                  <ul
+                    style={{
+                      listStyle: 'none',
+                      padding: 0,
+                      margin: 0,
+                      fontSize: '0.95rem',
+                      color: '#333',
+                    }}
+                  >
+                    {currentStatement.roles.map((role, idx) => (
+                      <li
+                        key={idx}
+                        style={{
+                          marginBottom: '4px',
+                          paddingLeft: '16px',
+                          position: 'relative',
+                        }}
+                      >
+                        <span
+                          style={{
+                            position: 'absolute',
+                            left: 0,
+                            color: '#999',
+                          }}
+                        >
+                          •
+                        </span>
+                        {role}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {currentStatement.example && (
+                <div>
+                  <div
+                    style={{
+                      fontSize: '0.85rem',
+                      fontWeight: '600',
+                      color: '#666',
+                      marginBottom: '6px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                    }}
+                  >
+                    Example:
+                  </div>
+                  <p
+                    style={{
+                      fontSize: '0.95rem',
+                      color: '#333',
+                      lineHeight: '1.5',
+                      margin: 0,
+                    }}
+                  >
+                    {currentStatement.example}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Clickable Details affordance */}
+          {currentStatement && (currentStatement.roles || currentStatement.example) && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                setIsPeekOpen((prev) => !prev)
+              }}
+              style={{
+                marginTop: '16px',
+                padding: '8px 12px',
+                fontSize: '0.85rem',
+                color: '#666',
+                backgroundColor: 'transparent',
+                border: '1px solid #e0e0e0',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                position: 'relative',
+                zIndex: 3,
+                transition: 'all 0.2s',
+                width: 'auto',
+                alignSelf: 'center',
+              }}
+              onMouseOver={(e) => {
+                e.currentTarget.style.backgroundColor = '#f5f5f5'
+                e.currentTarget.style.borderColor = '#999'
+              }}
+              onMouseOut={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent'
+                e.currentTarget.style.borderColor = '#e0e0e0'
+              }}
+            >
+              <span style={{ fontSize: '1rem' }}>ⓘ</span>
+              <span>{isPeekOpen ? 'Hide details' : 'Details'}</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Yes/No/Skip buttons */}
@@ -1150,77 +1789,122 @@ export default function PlayPage() {
           }}
         >
           <button
-            onClick={() => !dragState.isDragging && commitChoice('no')}
-            disabled={isAnimating}
+            onClick={() => {
+              if (!dragState.isDragging && !lockRef.current) {
+                setPressGlow('no')
+                setTimeout(() => setPressGlow(null), 150)
+                performSwipe('no', 'button')
+              }
+            }}
+            disabled={isAnimating || lockRef.current}
             style={{
               padding: '16px 32px',
               fontSize: '1.1rem',
               fontWeight: '600',
-              backgroundColor: '#f44336',
+              background: 'linear-gradient(180deg, #f44336, #d32f2f)',
               color: 'white',
-              border: 'none',
+              border: '1px solid rgba(0,0,0,0.1)',
               borderRadius: '12px',
               cursor: isAnimating ? 'default' : 'pointer',
-              transition: 'background-color 0.2s',
+              transition: 'all 0.15s ease',
               flex: 1,
               maxWidth: '150px',
+              outline: pressGlow === 'no' ? '2px solid rgba(239, 68, 68, 0.6)' : 'none',
+              outlineOffset: pressGlow === 'no' ? '2px' : '0',
+              boxShadow:
+                pressGlow === 'no'
+                  ? '0 0 0 4px rgba(239, 68, 68, 0.2), inset 0 1px 2px rgba(255,255,255,0.2)'
+                  : 'inset 0 1px 2px rgba(255,255,255,0.2), 0 2px 4px rgba(0,0,0,0.1)',
+              transform: pressGlow === 'no' ? 'scale(0.985)' : 'scale(1)',
             }}
             onMouseOver={(e) => {
-              if (!isAnimating) e.currentTarget.style.backgroundColor = '#d32f2f'
+              if (!isAnimating)
+                e.currentTarget.style.background = 'linear-gradient(180deg, #d32f2f, #b71c1c)'
             }}
             onMouseOut={(e) => {
-              if (!isAnimating) e.currentTarget.style.backgroundColor = '#f44336'
+              if (!isAnimating)
+                e.currentTarget.style.background = 'linear-gradient(180deg, #f44336, #d32f2f)'
             }}
           >
             NO
           </button>
           <button
-            onClick={() => !dragState.isDragging && commitChoice('yes')}
-            disabled={isAnimating}
+            onClick={() => {
+              if (!dragState.isDragging && !lockRef.current) {
+                setPressGlow('yes')
+                setTimeout(() => setPressGlow(null), 150)
+                performSwipe('yes', 'button')
+              }
+            }}
+            disabled={isAnimating || lockRef.current}
             style={{
               padding: '16px 32px',
               fontSize: '1.1rem',
               fontWeight: '600',
-              backgroundColor: '#4CAF50',
+              background: 'linear-gradient(180deg, #4CAF50, #45a049)',
               color: 'white',
-              border: 'none',
+              border: '1px solid rgba(0,0,0,0.1)',
               borderRadius: '12px',
               cursor: isAnimating ? 'default' : 'pointer',
-              transition: 'background-color 0.2s',
+              transition: 'all 0.15s ease',
               flex: 1,
               maxWidth: '150px',
+              outline: pressGlow === 'yes' ? '2px solid rgba(34, 197, 94, 0.6)' : 'none',
+              outlineOffset: pressGlow === 'yes' ? '2px' : '0',
+              boxShadow:
+                pressGlow === 'yes'
+                  ? '0 0 0 4px rgba(34, 197, 94, 0.2), inset 0 1px 2px rgba(255,255,255,0.2)'
+                  : 'inset 0 1px 2px rgba(255,255,255,0.2), 0 2px 4px rgba(0,0,0,0.1)',
+              transform: pressGlow === 'yes' ? 'scale(0.985)' : 'scale(1)',
             }}
             onMouseOver={(e) => {
-              if (!isAnimating) e.currentTarget.style.backgroundColor = '#45a049'
+              if (!isAnimating)
+                e.currentTarget.style.background = 'linear-gradient(180deg, #45a049, #388e3c)'
             }}
             onMouseOut={(e) => {
-              if (!isAnimating) e.currentTarget.style.backgroundColor = '#4CAF50'
+              if (!isAnimating)
+                e.currentTarget.style.background = 'linear-gradient(180deg, #4CAF50, #45a049)'
             }}
           >
             YES
           </button>
         </div>
         <button
-          onClick={() => !dragState.isDragging && commitSkip()}
-          disabled={isAnimating}
+          onClick={() => {
+            if (!dragState.isDragging && !lockRef.current) {
+              setPressGlow('skip')
+              setTimeout(() => setPressGlow(null), 150)
+              performSwipe('skip', 'button')
+            }
+          }}
+          disabled={isAnimating || lockRef.current}
           style={{
             padding: '12px 24px',
             fontSize: '0.95rem',
             fontWeight: '500',
-            backgroundColor: '#9e9e9e',
+            background: 'linear-gradient(180deg, #9e9e9e, #757575)',
             color: 'white',
-            border: 'none',
-            borderRadius: '10px',
+            border: '1px solid rgba(0,0,0,0.1)',
+            borderRadius: '12px',
             cursor: isAnimating ? 'default' : 'pointer',
-            transition: 'background-color 0.2s',
+            transition: 'all 0.15s ease',
             alignSelf: 'center',
             maxWidth: '200px',
+            outline: pressGlow === 'skip' ? '2px solid rgba(250, 204, 21, 0.6)' : 'none',
+            outlineOffset: pressGlow === 'skip' ? '2px' : '0',
+            boxShadow:
+              pressGlow === 'skip'
+                ? '0 0 0 4px rgba(250, 204, 21, 0.22), inset 0 1px 2px rgba(255,255,255,0.2)'
+                : 'inset 0 1px 2px rgba(255,255,255,0.2), 0 2px 4px rgba(0,0,0,0.1)',
+            transform: pressGlow === 'skip' ? 'scale(0.985)' : 'scale(1)',
           }}
           onMouseOver={(e) => {
-            if (!isAnimating) e.currentTarget.style.backgroundColor = '#757575'
+            if (!isAnimating)
+              e.currentTarget.style.background = 'linear-gradient(180deg, #757575, #616161)'
           }}
           onMouseOut={(e) => {
-            if (!isAnimating) e.currentTarget.style.backgroundColor = '#9e9e9e'
+            if (!isAnimating)
+              e.currentTarget.style.background = 'linear-gradient(180deg, #9e9e9e, #757575)'
           }}
         >
           Skip
@@ -1240,6 +1924,52 @@ export default function PlayPage() {
 
       {/* Dev Panel */}
       <DevPanel runState={runState} />
+
+      {/* Editorial completion celebration overlay */}
+      {finishFx.on && (
+        <div
+          key={finishFx.key}
+          className="editorialFinishWrap"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            pointerEvents: 'none',
+            ['--fx-ms' as any]: `${finishFx.ms}ms`,
+          }}
+        >
+          {/* Paper fade */}
+          <div className="editorialFinishPaper" style={{ position: 'absolute', inset: 0 }} />
+
+          {/* Hairline sweep (skip if reduced motion) */}
+          {!reducedMotion && (
+            <div
+              className="editorialFinishHairline"
+              style={{
+                position: 'absolute',
+                left: '-20%',
+                top: '40%',
+                width: '140%',
+                height: '2px',
+              }}
+            />
+          )}
+
+          {/* Subtle grain (optional, very low) */}
+          {!reducedMotion && (
+            <div
+              className="editorialFinishGrain"
+              style={{
+                position: 'absolute',
+                inset: 0,
+                backgroundImage:
+                  'url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27120%27 height=%27120%27%3E%3Cfilter id=%27n%27 x=%270%27 y=%270%27%3E%3CfeTurbulence type=%27fractalNoise%27 baseFrequency=%270.9%27 numOctaves=%271%27 stitchTiles=%27stitch%27/%3E%3C/filter%3E%3Crect width=%27120%27 height=%27120%27 filter=%27url(%23n)%27 opacity=%270.35%27/%3E%3C/svg%3E")',
+                backgroundSize: '180px 180px',
+              }}
+            />
+          )}
+        </div>
+      )}
     </main>
   )
 }

@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState, useEffect, useRef, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import type { RunState } from '@/types/schema'
 import { getLaneById } from '@/data/lanes'
 import { getFiguresByLaneId, type NotableFigure } from '@/data/figures'
@@ -53,8 +53,9 @@ type ResultsVM = {
   supportSummary: ReturnType<typeof getLaneSupportSummary>
 }
 
-export default function ResultsPage() {
+function ResultsPageContent() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [runState, setRunState] = useState<RunState | null>(null)
   const [savedActionIds, setSavedActionIds] = useState<string[]>([])
   const [activeSection, setActiveSection] = useState<
@@ -63,6 +64,8 @@ export default function ResultsPage() {
   const [whySheetOpen, setWhySheetOpen] = useState(false)
   const [savedSheetOpen, setSavedSheetOpen] = useState(false)
   const [artifactCopied, setArtifactCopied] = useState(false)
+  const [showCelebrate, setShowCelebrate] = useState(false)
+  const [reducedMotion, setReducedMotion] = useState(false)
   const firstActionTimeRef = useRef<number | null>(null)
   const runCompletedTrackedRef = useRef(false)
 
@@ -103,6 +106,24 @@ export default function ResultsPage() {
     }
 
     setSavedActionIds(loadSavedActionIds())
+
+    // Check for celebrate param and show one-time flourish
+    const celebrate = searchParams.get('celebrate')
+    if (celebrate) {
+      const hasShown =
+        typeof window !== 'undefined'
+          ? sessionStorage.getItem(`celebrate:${celebrate}`) === '1'
+          : false
+      if (!hasShown) {
+        setShowCelebrate(true)
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem(`celebrate:${celebrate}`, '1')
+          // Hide after animation
+          const fxMs = reducedMotion ? 160 : 520
+          setTimeout(() => setShowCelebrate(false), fxMs)
+        }
+      }
+    }
 
     // Track run_completed (only once per run)
     if (loaded && !runCompletedTrackedRef.current) {
@@ -346,18 +367,63 @@ export default function ResultsPage() {
 
   const savedActions = actions.filter((action) => savedActionIds.includes(action.id))
 
+  // Get celebrate param for flourish
+  const celebrate = searchParams.get('celebrate')
+  const fxMs = reducedMotion ? 160 : 520
+
   return (
     <main className="min-h-screen bg-gray-50">
       <div className="mx-auto max-w-md px-4 py-6">
         {/* Above the fold */}
-        <ResultsHero
-          topLane={topLane || null}
-          runnerUpLane={runnerUpLane || null}
-          confidenceLabel={confidenceLabel}
-          activeSection={activeSection}
-          onSectionToggle={handleSectionToggle}
-          onWhyClick={() => setWhySheetOpen(true)}
-        />
+        <div style={{ position: 'relative' }}>
+          {/* Editorial completion flourish (one-time, behind header) */}
+          {showCelebrate && celebrate && (
+            <div
+              key={celebrate}
+              className="editorialFinishWrap"
+              style={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                top: -8,
+                height: 120,
+                pointerEvents: 'none',
+                zIndex: 0,
+                overflow: 'hidden',
+                ['--fx-ms' as any]: `${fxMs}ms`,
+              }}
+            >
+              {/* Paper wash just behind header */}
+              <div
+                className="editorialFinishPaper"
+                style={{ position: 'absolute', inset: 0, opacity: 0.55 }}
+              />
+
+              {!reducedMotion && (
+                <div
+                  className="editorialFinishHairline"
+                  style={{
+                    position: 'absolute',
+                    left: '-15%',
+                    top: '62%',
+                    width: '130%',
+                    height: '2px',
+                  }}
+                />
+              )}
+            </div>
+          )}
+          <div style={{ position: 'relative', zIndex: 1 }}>
+            <ResultsHero
+              topLane={topLane || null}
+              runnerUpLane={runnerUpLane || null}
+              confidenceLabel={confidenceLabel}
+              activeSection={activeSection}
+              onSectionToggle={handleSectionToggle}
+              onWhyClick={() => setWhySheetOpen(true)}
+            />
+          </div>
+        </div>
 
         {/* Accordion sections */}
         {topLaneId && topLane && (
@@ -420,5 +486,13 @@ export default function ResultsPage() {
       {/* Dev Panel */}
       <DevPanel runState={runState} />
     </main>
+  )
+}
+
+export default function ResultsPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <ResultsPageContent />
+    </Suspense>
   )
 }
